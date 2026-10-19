@@ -148,6 +148,7 @@ See [GS renderer options](docs/GS-RENDERER-OPTIONS.md) and [GSDX-PLAN](docs/GSDX
 | TASK‑136 | Simple onboarding: a new install uses CoreGS 2.0 when the PC runs it, GSdx becomes optional and is downloaded only when the card needs it | 🧪 Built, waits for the owner's test (branch `task/136-simple-onboarding`, 2026-11-02) |
 | TASK‑137 | The launcher links the disc image and no longer copies it; an image that moved asks to be chosen again; installs with a copy keep working | 🧪 Built, waits for the owner's test (branch `task/137-link-disc-image`, candidate 381, 2026-11-02) |
 | TASK‑138 | A portable folder carries its disc image (relative link); accented paths on CoreGS 2.0; the GSdx fallback goes to CoreGS 2.0; a release can be started directly | 🧪 Built, waits for the owner's test (branch `task/138-relative-image-link`, candidate 382, 2026-11-02); GSdx in an accented folder not confirmed |
+| TASK‑074 | Native Linux x86-64 build (SDL3 platform layer, Linux gt4-gs owning the window, Linux packaging) | 📋 Planned (branch `linux/main`; [plan](docs/linux/PLAN.md)) |
 | 🧩 | **gt4-gs 1.0.0, the first stable renderer release** (with TASK‑060/061/062; settings allow-list enforced) | ✅ Published 2026-10-16 (`gt4gs-v1.0.0`, zip sha256 `2e878019...`) |
 | 🚀 | **First stable release (1.0.0) on GitHub** (after TASK‑044, TASK‑043 and the owner's end-to-end test) | 📋 Planned |
 
@@ -1548,6 +1549,14 @@ Owner decisions (2026-10-21). Release 1.2.0 of both the game/launcher and gt4-gs
   Game build slice240 (`private/slice240-game-build`): see `docs/BUILD.md` slice 240.
 - **Status.** Waiting for the owner's test. Nothing is tagged, released, drafted or merged; gt4-gs 1.2.0 is a local package
   until the owner approves it.
+
+### TASK-074 — Linux build
+Owner request 2026-10-19: a native Linux x86-64 build, planned on the branch `linux/main`, not started yet.
+The game code and donor runtime are already portable C++; only the native adapter (window, input, audio, clock,
+GS stream IPC, paths) and the gt4-gs frontend are Windows-specific. Steps L0-L5 (platform seam, Linux build,
+SDL3 backend, gt4-gs for Linux with gt4-gs owning the window, packaging, owner test; try Proton/Wine first):
+[docs/linux/PLAN.md](docs/linux/PLAN.md). Acceptance: the Windows build is unchanged (headless 42/42, CTest,
+Python); the owner plays the reference scene on real Linux at 60 FPS with the PCSX2 GS and CoreGS 1.1.
 
 ### TASK-018 — Racing wheels
 
