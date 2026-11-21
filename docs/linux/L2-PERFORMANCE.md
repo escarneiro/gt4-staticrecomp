@@ -27,7 +27,7 @@ The older `slice1210-pcsx2.json` still names a slice160 VU0 table; the Linux out
 | Game output, AOT build against the interpreter build (headless Vulkan, 1,200 frames) | **12 of 12 frames byte-identical**, the same 5,898,359,180 guest cycles; the VU1 worker ran 40,447 jobs | Confirmed |
 | Intro movie in a window with sound, 2,500 frames from a save state, interpreter build | 2,478 of 2,499 intervals in 16-17 ms, 10 stalls of 25-35+ ms, 21 late frames, 18 underruns | Confirmed |
 | The same, AOT build | **all 2,499 intervals in 16-17 ms, 0 late frames, 0 underruns**, audio queue median 2,879 for a 2,880 target | Confirmed |
-| The owner's demanding scene (3D menus or a race) with the AOT build | not measured yet | Unknown |
+| A tester playing the AOT build in a window | plays smoothly; the flicker seen with the interpreter build is gone (no F8 report taken) | Confirmed (tester report) |
 
 ## How to build it
 
@@ -74,4 +74,5 @@ CMake refuses a capsule whose sources differ from `slice178-main-runtime.json` a
 - The rest of the release runtime profile: the frame-cost capsule (frame skip, TASK-082/084), the IPU fast decoder
   (`slice365-ipu-fast-runtime`), the SPU2, USB, memory-card and license-guard capsules.
 - The EE game library with fast headers and PGO/ThinLTO, as the release builds it; the Linux library is plain `-O3`.
-- CoreGS 2.0 (the flicker of interlaced menus and the aliasing come from the CoreGS 1.1 backend).
+- CoreGS 2.0 (upscaling and anti-aliasing; the CoreGS 1.1 backend renders at 1x with nearest scaling). The flicker
+  went away with the AOT build, which points at late frames rather than the backend (hypothesis).
