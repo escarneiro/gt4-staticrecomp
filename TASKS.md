@@ -1622,6 +1622,13 @@ refused there), an X11/Wayland attach through the derived port's stream hook. Co
 1,200 presents, 1,199 deinterlaced, all intervals 16-17 ms, 0 late, 0 underruns, identical guest cycles. Combined CTest
 268/268. Not yet seen by the tester.
 
+Progress (2026-11-21, same branch, game patches): the release's game code (aspect ELF patch, pinned seeds,
+`camera360_units.py`) reproduced on Linux equal to the slice408 pins, with the slice262 frame-cost and license guard
+capsules (also equal to their pins). New `native/linux/linux_main.cpp`, the 480p hold, display aspect, `GT4_FULLSCREEN`
+and `GT4_OUTPUT_SIZE` in the window host, `scripts/linux/play.sh` with the launcher's defaults. Camera, FoV, trigger range,
+aspect, 480p and 16:9 report active and set the game's values. Not yet: frame skip, the other release capsules.
+Details: [docs/linux/L2-PATCHES.md](docs/linux/L2-PATCHES.md).
+
 ### TASK-018 — Racing wheels
 
 Study (2026-11-04): Luan Antony's wheel, DFP and force feedback roadmap (`docs/studies/WHEEL-FFB-ROADMAP.md`, PR #151, issue

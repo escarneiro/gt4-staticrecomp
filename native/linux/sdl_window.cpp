@@ -7,22 +7,33 @@
 // controls table (GT4_CONTROLS_FILE) for the keyboard and the first SDL3 gamepad (GT4_PAD selects one), rumble, F11
 // and Alt+Enter fullscreen, and the Windows host's pacing (GT4_PACING): by default the frame clock releases every
 // VBlank on a 60 Hz grid and the sound is resampled to keep its queue at the latency target (sdl_audio.hpp); F8
-// prints the pacing report. What it does not have yet (later TASK-074 steps): the game patches (widescreen hooks,
-// 360 camera, FoV), racing wheels, RetroAchievements, the F7/F8 performance probe sections, input recording and the
-// GS process (gt4-gs).
+// prints the pacing report. The game patches: GT4_FORCE_480P is held here at every VBlank (the VU1 worker runtime holds
+// it too, as on Windows); the display aspect (GT4_DISPLAY_ASPECT) gets the window size and the race view presentation
+// from here; the rest act from the translated game and the runtime (linux_main.cpp configures them). What it does not
+// have yet (later TASK-074 steps): the frame skip's host side, racing wheels, RetroAchievements, the F7/F8 performance
+// probe sections, input recording and the GS process (gt4-gs).
 
 #include "window.hpp"
 
 #include "controls.hpp"
+#include "display_aspect.hpp"
 #include "frame_clock.hpp"
 #include "gpu.hpp"
 #include "gs/gs.hpp"
 #include "keyboard_scancodes.hpp"
 #include "linux/sdl_audio.hpp"
+#include "native_vulkan.hpp"
+#include "race_display.hpp"
+#include "race_widescreen.hpp"
 #include "pacing.hpp"
 #include "pad_mapping.hpp"
 #include "ps2/system.hpp"
 #include "sdl_gamepad.hpp"
+#include "window_mode.hpp"
+#ifdef GT4_GS_STREAM_CLIENT
+#include "gs_stream/gs_stream_client.hpp"
+#endif
+#include "ps2/memory.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -63,6 +74,24 @@ gt4::pacing::Diagnostics g_diagnostics;
 gt4::pacing::Counters g_counters_at_report;
 std::int64_t g_last_release = 0;
 bool g_report_requested = false;
+
+// GT4_FORCE_480P (slice164): the race display index held at 480p at every VBlank.
+bool g_force_480p = false;
+gt4::display::Force480pState g_force_480p_state;
+
+// TASK-080: the race view presentation the display aspect asks for, to whichever renderer presents (window.cpp
+// present_race_view): CoreGS through the GS stream seam, else the native Vulkan backend.
+void present_race_view(bool fill, double ratio) {
+#ifdef GT4_GS_STREAM_CLIENT
+  if (gt4::gs_stream::stream_renderer()) {
+    gt4::gs_stream::set_display_aspect_mode(fill ? gt4::gs_stream::DisplayAspectMode::fill
+                                                 : gt4::gs_stream::DisplayAspectMode::game_aspect,
+                                            fill ? gt4::gs_stream::aspect_millionths(ratio) : 0);
+    return;
+  }
+#endif
+  gt4::vulkan::set_race_view_presentation(fill, ratio);
+}
 
 void close_gamepad() {
   if (g_pad) {
@@ -128,6 +157,8 @@ void poll_events() {
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
       ps2::gs::resize_window(static_cast<std::uint32_t>(event.window.data1),
                              static_cast<std::uint32_t>(event.window.data2));
+      gt4::display_aspect::set_window_client_size(static_cast<std::uint32_t>(event.window.data1),
+                                                  static_cast<std::uint32_t>(event.window.data2));
       break;
     case SDL_EVENT_GAMEPAD_ADDED:
       open_gamepad();
@@ -236,6 +267,8 @@ void release_frame() {
 void on_vblank() {
   release_frame();
   poll_events();
+  if (g_force_480p)
+    gt4::display::force_race_480p_at_vblank(ps2::g_ram, ps2::kRamSize, g_force_480p_state);
   // Scripted presses (--press) drive the pad on their own, as in the headless runner.
   if (ps2::g_options.presses.empty())
     apply_pad(read_pad());
@@ -271,6 +304,16 @@ bool open_window(bool fullscreen) {
     std::fprintf(stderr, "[input] %s\n", error.what());
     return false;
   }
+  // The launcher's GT4_FULLSCREEN (its Display setting) and GT4_OUTPUT_SIZE (the window size, WxH), as window.cpp reads
+  // them; an invalid value stops the start. Without GT4_OUTPUT_SIZE the window opens at 1280x720.
+  gt4::display_aspect::OutputSize output;
+  try {
+    fullscreen = fullscreen || gt4::window_mode::parse_start_fullscreen(std::getenv("GT4_FULLSCREEN"));
+    output = gt4::display_aspect::configured_output_size();
+  } catch (const std::exception &error) {
+    std::fprintf(stderr, "[window] %s, game not started\n", error.what());
+    return false;
+  }
   for (const auto &binding : gt4::controls::keyboard_bindings(g_controls))
     g_keys.push_back({gt4::keyboard::scancodes_for_virtual_key(binding.virtual_key), binding.button_mask});
   if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) {
@@ -280,7 +323,8 @@ bool open_window(bool fullscreen) {
   // SDL_WINDOW_VULKAN keeps SDL from putting its own GL/EGL surface on the window the Vulkan backend presents to.
   const SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN | SDL_WINDOW_HIGH_PIXEL_DENSITY |
                                 (fullscreen ? SDL_WINDOW_FULLSCREEN : 0);
-  g_window = SDL_CreateWindow("GT4Recomp (Linux preview)", 1280, 720, flags);
+  g_window = SDL_CreateWindow("GT4Recomp (Linux preview)", output.known() ? static_cast<int>(output.width) : 1280,
+                              output.known() ? static_cast<int>(output.height) : 720, flags);
   if (!g_window) {
     std::fprintf(stderr, "[window] SDL: %s\n", SDL_GetError());
     SDL_Quit();
@@ -290,10 +334,16 @@ bool open_window(bool fullscreen) {
     SDL_HideCursor();
   try {
     g_pacing_mode = gt4::pacing::parse_mode(std::getenv("GT4_PACING"));
+    // The display switches are read here as on Windows (window.cpp open_window), so an invalid value stops the start.
+    gt4::display_aspect::configured_setting();
+    g_force_480p = gt4::display::parse_force_480p(std::getenv("GT4_FORCE_480P"));
+    gt4::display::widescreen_hold_enabled();
   } catch (const std::exception &error) {
-    std::fprintf(stderr, "[pacing] %s\n", error.what());
+    std::fprintf(stderr, "[window] %s\n", error.what());
     return false;
   }
+  if (g_force_480p)
+    std::fprintf(stderr, "[display] GT4_FORCE_480P: races held at 480p\n");
   g_clock = std::make_unique<FrameClock>();
   g_pacer = std::make_unique<gt4::pacing::FramePacer>(g_clock->frequency(), gt4::pacing::guest_vblank_rate);
   const char *audio_choice = std::getenv("GT4_AUDIO");
@@ -355,8 +405,10 @@ int run_window(const std::function<int()> &emulate) {
     close_all();
     return 1;
   }
-  // The presentation is 16:9 pillarbox, as on Windows.
+  // The presentation is 16:9 pillarbox, as on Windows; the display aspect widens the race view from the window size.
   ps2::gs::gpu::set_widescreen(true);
+  gt4::display_aspect::set_window_client_size(static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height));
+  gt4::display_aspect::set_presentation_sink(present_race_view);
   // GT4_RENDERER=hw: the port's GS stream hook gave the window to CoreGS 2.0 (native/hw_gs); otherwise the donor-derived
   // native Vulkan backend (CoreGS 1.1) presents.
   const char *renderer = std::getenv("GT4_RENDERER");

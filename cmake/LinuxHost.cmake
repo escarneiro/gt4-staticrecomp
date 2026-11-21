@@ -381,10 +381,11 @@ if(GT4_LINUX_PORT_DIR OR GT4_LINUX_SHADER_DIR)
         if(NOT gt4_capsule_files STREQUAL gt4_capsule_expected)
             message(FATAL_ERROR "GT4_LINUX_RUNTIME_CAPSULE must hold exactly the --mtvu sources and runtime.json")
         endif()
-        # Two pinned profiles: prepare_perf_runtime.py --mtvu (slice178) and --gs-stream (slice191: the same plus the GS
-        # stream hooks in gif.cpp and hw.cpp, which CoreGS needs). The capsule must equal one of them in every source.
+        # Three pinned profiles: prepare_perf_runtime.py --mtvu (slice178), --gs-stream (slice191: the same plus the GS
+        # stream hooks in gif.cpp and hw.cpp, which CoreGS needs) and --gs-stream --frame-cost (slice262: the release's
+        # source capsule, with the TASK-084 frame-cost hooks). The capsule must equal one of them in every source.
         set(gt4_capsule_profile "")
-        foreach(candidate IN ITEMS slice178-main-runtime slice191-gs-stream-runtime)
+        foreach(candidate IN ITEMS slice178-main-runtime slice191-gs-stream-runtime slice262-frame-cost-runtime)
             file(READ "${CMAKE_SOURCE_DIR}/docs/inputs/${candidate}.json" gt4_capsule_manifest)
             set(gt4_capsule_matches ON)
             foreach(source IN LISTS gt4_capsule_sources)
@@ -404,7 +405,11 @@ if(GT4_LINUX_PORT_DIR OR GT4_LINUX_SHADER_DIR)
                                 "slice191-gs-stream-runtime.json; derive it with prepare_perf_runtime.py --mtvu or --gs-stream")
         endif()
         message(STATUS "Linux runtime capsule: ${gt4_capsule_profile} (every source equals its pin)")
-        if(gt4_capsule_profile STREQUAL "slice191-gs-stream-runtime" AND NOT GT4_LINUX_HW_GS)
+        set(gt4_capsule_gs_stream OFF)
+        if(gt4_capsule_profile MATCHES "^slice(191-gs-stream|262-frame-cost)-runtime$")
+            set(gt4_capsule_gs_stream ON)
+        endif()
+        if(gt4_capsule_gs_stream AND NOT GT4_LINUX_HW_GS)
             message(FATAL_ERROR "The --gs-stream capsule feeds CoreGS: configure with -DGT4_LINUX_HW_GS=ON")
         endif()
         foreach(source IN LISTS gt4_capsule_sources)
@@ -458,6 +463,35 @@ if(GT4_LINUX_PORT_DIR OR GT4_LINUX_SHADER_DIR)
         set(gt4_linux_aot ON)
     endif()
 
+    # TASK-017/TASK-080: the license guard capsule of the release (prepare_license_guard.py --display-aspect
+    # --frame-counters, with the license guard overlay of the slice262 capsule, git bc6d3d04): the license demo guard, the
+    # race camera aspect hook and the HUD canvas hook (dispatch.cpp), the halt dump (kernel.cpp, with the frame
+    # counters) and the FSV trace (cdvdfsv.cpp). Its three sources must equal the slice408 (1.3.0-rc14) pins.
+    set(GT4_LINUX_LICENSE_GUARD "" CACHE PATH "prepare_license_guard.py capsule equal to the release's slice262 guard")
+    if(GT4_LINUX_LICENSE_GUARD)
+        file(GLOB gt4_guard_files RELATIVE "${GT4_LINUX_LICENSE_GUARD}" "${GT4_LINUX_LICENSE_GUARD}/*")
+        list(SORT gt4_guard_files)
+        if(NOT gt4_guard_files STREQUAL "cdvdfsv.cpp;dispatch.cpp;kernel.cpp;runtime.json")
+            message(FATAL_ERROR "GT4_LINUX_LICENSE_GUARD must hold exactly cdvdfsv.cpp, dispatch.cpp, kernel.cpp and runtime.json")
+        endif()
+        file(READ "${CMAKE_SOURCE_DIR}/docs/inputs/slice408-pcsx2.json" gt4_guard_manifest)
+        foreach(source IN ITEMS cdvdfsv.cpp dispatch.cpp kernel.cpp)
+            string(JSON gt4_guard_expected GET "${gt4_guard_manifest}" license_guard_source_sha256 "${source}")
+            file(SHA256 "${GT4_LINUX_LICENSE_GUARD}/${source}" gt4_guard_actual)
+            if(NOT gt4_guard_actual STREQUAL gt4_guard_expected)
+                message(FATAL_ERROR "License guard ${source} differs from docs/inputs/slice408-pcsx2.json")
+            endif()
+            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GT4_LINUX_LICENSE_GUARD}/${source}")
+        endforeach()
+        list(REMOVE_ITEM gt4_donor_runtime "${GT4_DONOR}/runtime/src/dispatch.cpp" "${GT4_DONOR}/runtime/src/kernel.cpp"
+             "${GT4_DONOR}/runtime/src/iop/cdvdfsv.cpp")
+        list(APPEND gt4_donor_runtime "${GT4_LINUX_LICENSE_GUARD}/dispatch.cpp" "${GT4_LINUX_LICENSE_GUARD}/kernel.cpp"
+             "${GT4_LINUX_LICENSE_GUARD}/cdvdfsv.cpp")
+        set_source_files_properties("${GT4_LINUX_LICENSE_GUARD}/cdvdfsv.cpp" PROPERTIES
+            INCLUDE_DIRECTORIES "${GT4_DONOR}/runtime/src/iop")
+        message(STATUS "Linux license guard capsule: equals the slice408 pins")
+    endif()
+
     add_library(gt4_ps2runtime_vulkan STATIC ${gt4_donor_runtime} "${GT4_LINUX_PORT_DIR}/gs.cpp"
         "${GT4_LINUX_PORT_DIR}/gpu.cpp" "${GT4_NATIVE}/native_vulkan.cpp")
     # TASK-134 fast headers, on by default as in native/CMakeLists.txt: the donor's runtime headers with exact faster forms
@@ -482,11 +516,54 @@ if(GT4_LINUX_PORT_DIR OR GT4_LINUX_SHADER_DIR)
     elseif(gt4_linux_aot)
         message(FATAL_ERROR "The release VU0 table needs GT4_FAST_HEADERS (it includes ps2/fp4.hpp)")
     endif()
+    if(GT4_LINUX_LICENSE_GUARD)
+        target_link_libraries(gt4_ps2runtime_vulkan PUBLIC gt4_license_guard gt4_quickfix)
+    endif()
+
+    # TASK-074 game patches: the game library from the release's translated units (the slice217 aspect units with the
+    # hook sites of scripts/camera360_units.py), built with the fast headers as the release builds it. The folder must
+    # equal the slice408 output inventory pin, else the build stops.
+    set(GT4_LINUX_GAME_UNITS "" CACHE PATH "camera360_units.py output equal to the release's units (slice408 pin)")
+    if(GT4_LINUX_GAME_UNITS)
+        if(NOT GT4_FAST_HEADERS)
+            message(FATAL_ERROR "The release units are built with the fast headers (GT4_FAST_HEADERS=ON)")
+        endif()
+        execute_process(COMMAND "${GT4_PYTHON}" -c [=[
+import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import camera360_units as units
+digest = units.inventory_digest(units.inventory(Path(sys.argv[2])))
+pin = json.load(open(sys.argv[3]))['camera360_units']['output_inventory_sha256']
+print(digest)
+sys.exit(0 if digest == pin else 1)
+]=] "${CMAKE_SOURCE_DIR}/scripts" "${GT4_LINUX_GAME_UNITS}" "${CMAKE_SOURCE_DIR}/docs/inputs/slice408-pcsx2.json"
+            RESULT_VARIABLE gt4_units_result OUTPUT_VARIABLE gt4_units_digest OUTPUT_STRIP_TRAILING_WHITESPACE)
+        if(NOT gt4_units_result EQUAL 0)
+            message(FATAL_ERROR "GT4_LINUX_GAME_UNITS inventory ${gt4_units_digest} differs from the slice408 pin")
+        endif()
+        message(STATUS "Linux game units: release inventory ${gt4_units_digest}")
+        file(GLOB gt4_game_unit_sources "${GT4_LINUX_GAME_UNITS}/*.cpp")
+        add_library(gt4_game_units STATIC ${gt4_game_unit_sources})
+        target_include_directories(gt4_game_units BEFORE PRIVATE "${gt4_fast_headers}")
+        target_include_directories(gt4_game_units PRIVATE "${GT4_LINUX_GAME_UNITS}" "${GT4_DONOR}/runtime/include")
+        target_compile_options(gt4_game_units PRIVATE -Wno-unused-label -Wno-unused-variable -fPIE)
+        set(gt4_linux_library gt4_game_units)
+    endif()
+
+    # The host functions the release units call (camera_360_hook.cpp, fov_adjust_hook.cpp, display_aspect_hook.cpp: they
+    # read guest registers and RAM, so they belong to the game executable, as in gt4vulkan on Windows). Linked with every
+    # game executable; with the baseline library nothing calls them.
+    add_library(gt4_patch_hooks STATIC "${GT4_NATIVE}/camera_360_hook.cpp" "${GT4_NATIVE}/fov_adjust_hook.cpp"
+        "${GT4_NATIVE}/display_aspect_hook.cpp")
+    target_link_libraries(gt4_patch_hooks PUBLIC gt4_ps2runtime_vulkan gt4_quickfix)
+    target_compile_options(gt4_patch_hooks PRIVATE ${GT4_WARNINGS})
+
     if(gt4_linux_aot)
         target_include_directories(gt4_ps2runtime_vulkan PUBLIC "${CMAKE_SOURCE_DIR}/tools/vu_recomp/src")
         target_compile_definitions(gt4_ps2runtime_vulkan PUBLIC GT4_PERF_PROBE)
         target_link_libraries(gt4_ps2runtime_vulkan PUBLIC gt4_mtvu_runtime)
-        if(gt4_capsule_profile STREQUAL "slice191-gs-stream-runtime")
+        if(gt4_capsule_gs_stream)
             # TASK-074 CoreGS: the GS stream seam with GT4_RENDERER=hw taken in process by CoreGS (native/hw_gs). The
             # GS process transport compiles but refuses on Linux (gs_stream_ipc.cpp); the port must come from
             # prepare_external_vulkan.py --gs-stream-hooks --linux-surfaces.
@@ -576,14 +653,22 @@ if(GT4_LINUX_PORT_DIR OR GT4_LINUX_SHADER_DIR)
         elseif(NOT gt4_linux_surface_attach)
             message(STATUS "gt4_linux_window not built: derive GT4_LINUX_PORT_DIR with --linux-surfaces")
         else()
-            add_executable(gt4_linux_window "${GT4_LINUX_PORT_DIR}/main.cpp" "${GT4_NATIVE}/linux/sdl_window.cpp"
-                "${GT4_NATIVE}/linux/sdl_audio.cpp" "${GT4_NATIVE}/sdl_gamepad.cpp" "${GT4_NATIVE}/frame_clock.cpp")
+            # The port's main.cpp runs as gt4_donor_main behind native/linux/linux_main.cpp (as game_main.cpp on Windows),
+            # with the game patches' host functions the release units call.
+            # The port's main.cpp is compiled once more on its own, renamed (source properties are per directory and
+            # the headless runners keep it as their main).
+            add_library(gt4_port_donor_main OBJECT "${GT4_LINUX_PORT_DIR}/main.cpp")
+            target_compile_definitions(gt4_port_donor_main PRIVATE PS2_WINDOW main=gt4_donor_main)
+            target_link_libraries(gt4_port_donor_main PRIVATE gt4_ps2runtime_vulkan)
+            add_executable(gt4_linux_window $<TARGET_OBJECTS:gt4_port_donor_main> "${GT4_NATIVE}/linux/linux_main.cpp"
+                "${GT4_NATIVE}/linux/sdl_window.cpp" "${GT4_NATIVE}/linux/sdl_audio.cpp" "${GT4_NATIVE}/sdl_gamepad.cpp"
+                "${GT4_NATIVE}/frame_clock.cpp")
             target_compile_definitions(gt4_linux_window PRIVATE PS2_WINDOW)
-            set_source_files_properties("${GT4_LINUX_PORT_DIR}/main.cpp" TARGET_DIRECTORY gt4_linux_window
-                PROPERTIES COMPILE_OPTIONS "-include;${GT4_NATIVE}/host_compat.hpp")
+            set_source_files_properties("${GT4_LINUX_PORT_DIR}/main.cpp" PROPERTIES
+                COMPILE_OPTIONS "-include;${GT4_NATIVE}/host_compat.hpp")
             target_compile_options(gt4_linux_window PRIVATE ${GT4_WARNINGS})
             target_link_libraries(gt4_linux_window PRIVATE gt4_controls gt4_pad_mapping SDL3::SDL3
-                "$<LINK_GROUP:RESCAN,${gt4_linux_library},gt4_ps2runtime_vulkan>")
+                "$<LINK_GROUP:RESCAN,${gt4_linux_library},gt4_patch_hooks,gt4_ps2runtime_vulkan>")
         endif()
 
         # The port's main.cpp is the donor host with PS2_GS=gpu forced (no silent CPU raster fallback); its
@@ -591,6 +676,6 @@ if(GT4_LINUX_PORT_DIR OR GT4_LINUX_SHADER_DIR)
         add_executable(gt4_vulkan_headless_smoke "${GT4_LINUX_PORT_DIR}/main.cpp")
         target_compile_options(gt4_vulkan_headless_smoke PRIVATE -include "${GT4_NATIVE}/host_compat.hpp")
         target_link_libraries(gt4_vulkan_headless_smoke PRIVATE
-            "$<LINK_GROUP:RESCAN,${gt4_linux_library},gt4_ps2runtime_vulkan>")
+            "$<LINK_GROUP:RESCAN,${gt4_linux_library},gt4_patch_hooks,gt4_ps2runtime_vulkan>")
     endif()
 endif()
