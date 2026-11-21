@@ -148,7 +148,7 @@ See [GS renderer options](docs/GS-RENDERER-OPTIONS.md) and [GSDX-PLAN](docs/GSDX
 | TASK‑136 | Simple onboarding: a new install uses CoreGS 2.0 when the PC runs it, GSdx becomes optional and is downloaded only when the card needs it | 🧪 Built, waits for the owner's test (branch `task/136-simple-onboarding`, 2026-11-02) |
 | TASK‑137 | The launcher links the disc image and no longer copies it; an image that moved asks to be chosen again; installs with a copy keep working | 🧪 Built, waits for the owner's test (branch `task/137-link-disc-image`, candidate 381, 2026-11-02) |
 | TASK‑138 | A portable folder carries its disc image (relative link); accented paths on CoreGS 2.0; the GSdx fallback goes to CoreGS 2.0; a release can be started directly | 🧪 Built, waits for the owner's test (branch `task/138-relative-image-link`, candidate 382, 2026-11-02); GSdx in an accented folder not confirmed |
-| TASK‑074 | Native Linux x86-64 build (SDL3 platform layer, Linux gt4-gs owning the window, Linux packaging) | 📋 Planned (branch `linux/main`; [plan](docs/linux/PLAN.md)) |
+| TASK‑074 | Native Linux x86-64 build (SDL3 platform layer, Linux gt4-gs owning the window, Linux packaging) | 🔧 L1 started (2026-11-20, branch `task/074-linux-host-build`): Linux host-only CMake build, 36/36 CTest with clang and GCC; game build not yet ([plan](docs/linux/PLAN.md), [host build](docs/linux/HOST-BUILD.md)) |
 | 🧩 | **gt4-gs 1.0.0, the first stable renderer release** (with TASK‑060/061/062; settings allow-list enforced) | ✅ Published 2026-10-16 (`gt4gs-v1.0.0`, zip sha256 `2e878019...`) |
 | 🚀 | **First stable release (1.0.0) on GitHub** (after TASK‑044, TASK‑043 and the owner's end-to-end test) | 📋 Planned |
 
@@ -1557,6 +1557,14 @@ GS stream IPC, paths) and the gt4-gs frontend are Windows-specific. Steps L0-L5 
 SDL3 backend, gt4-gs for Linux with gt4-gs owning the window, packaging, owner test; try Proton/Wine first):
 [docs/linux/PLAN.md](docs/linux/PLAN.md). Acceptance: the Windows build is unchanged (headless 42/42, CTest,
 Python); the owner plays the reference scene on real Linux at 60 FPS with the PCSX2 GS and CoreGS 1.1.
+
+Progress (2026-11-20, branch `task/074-linux-host-build`, L1 first part): the root `CMakeLists.txt` includes
+`cmake/LinuxHost.cmake` when `WIN32` is false (the Windows recipe is unchanged). It builds the platform-neutral host
+libraries and 36 CTest fixtures, with the Windows test names, and needs no private assets. Results: clang 23.1.4 and
+GCC 16.2.1 36/36 (v2.00), clang 36/36 (Spec II). Source changes sit behind `#ifndef _WIN32` (`native/host_compat.hpp`,
+`perf_clock.cpp`, `perf_probe.cpp`); the linked-image fixture checks POSIX paths on Linux. Still to do: a Windows
+CTest/Python run of these changes before a merge; the game library and runtime on Linux (rest of L1). Details:
+[docs/linux/HOST-BUILD.md](docs/linux/HOST-BUILD.md).
 
 ### TASK-018 — Racing wheels
 
