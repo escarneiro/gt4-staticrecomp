@@ -43,7 +43,8 @@ through a wrapper (below); the repository file is unchanged.
 | In the game | the 480p hold set the race display index from 0 (normal) to 1 (480p); the 16:9 hold set the game's wide flag | Confirmed |
 | 1,200 frames | all intervals 16-17 ms, 0 late, 0 underruns; guest cycles 5 more than without the patches (the patches' own writes) | Confirmed |
 | 21:9 window (`GT4_OUTPUT_SIZE=1680x720`) | `[aspect] auto (output size 1680x720, 21.00:9)`; menus pillarboxed at 16:9 as on Windows | Confirmed |
-| Races at 480p and other ratios, the camera, the zoom, the HUD at 21:9, seen by a person | not yet | Unknown |
+| Tester playing it (2026-11-21) | ultrawide works; the image is steady and sharp | Confirmed (tester report) |
+| The 360-degree camera, the zoom and the trigger range, seen by a person | not reported | Unknown |
 
 ## How to build and play
 
