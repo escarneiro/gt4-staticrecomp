@@ -79,7 +79,7 @@ the frame pacing and sound. The tester has not played it yet.
 | **CoreGS 2.0 core 2 (`GT4_HW_CORE=2`), 3x, FXAA, sound, 1,200 frames, Wayland** | 1,200 presents, 1,199 deinterlaced; **all 1,199 intervals in 16-17 ms, 0 late frames, 0 underruns**; the same 5,898,359,180 guest cycles as every other renderer | Confirmed |
 | CoreGS 2.0 core 2 on X11 (XWayland), 300 frames | 300 presents, exit 0 | Confirmed |
 | CTest, the combined build (host, Vulkan, VU AOT, CoreGS) | **268/268** | Confirmed |
-| Picture quality (upscaling, FXAA, deinterlacing) seen by a person | not yet | Unknown |
+| Tester playing it (2026-11-21) | CoreGS 2.0 at 3x with FXAA: runs fine, the image looks good; the same executable without the `GT4_HW_*` / `GT4_RENDERER` switches (CoreGS 1.1) also looks good | Confirmed (tester report) |
 
 ### How to run it
 
