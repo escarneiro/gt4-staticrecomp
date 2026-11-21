@@ -65,9 +65,59 @@ ctest --test-dir <build dir> -j 4
 
 Needs `glslangValidator` (openSUSE: `glslang-devel`) and the Vulkan headers and loader; no private assets.
 
-## Part 2 (next): CoreGS in the game
+## Part 2: CoreGS in the game (2026-11-21)
 
-The game reaches CoreGS through the GS stream seam with `GT4_RENDERER=hw` (in-process sink, no GS process): the
-`--gs-stream` runtime capsule (slice191), a port derived with `--gs-stream-hooks` (and `--linux-surfaces`), the
-`gt4_gs_stream_client` library (its process and shared-memory transport are Win32 and are not needed in hw mode), and
-the Linux window host attaching its X11/Wayland window to the hw backend.
+Status: **the game runs on CoreGS 2.0 in a Linux window** (Wayland and X11), with the release profile's VU path,
+the frame pacing and sound. The tester has not played it yet.
+
+### Results (RX 6600, RADV, KDE Wayland, the AOT build)
+
+| Check | Result | Label |
+|---|---|---|
+| `--gs-stream` runtime capsule | the 7 derived sources byte-identical to `slice191-gs-stream-runtime.json` (and slice200) | Confirmed |
+| CoreGS core 1, scale 1, no sound, 600 frames, Wayland | 600 presents, 594 deinterlaced frames, all intervals 16-17 ms, exit 0 | Confirmed |
+| **CoreGS 2.0 core 2 (`GT4_HW_CORE=2`), 3x, FXAA, sound, 1,200 frames, Wayland** | 1,200 presents, 1,199 deinterlaced; **all 1,199 intervals in 16-17 ms, 0 late frames, 0 underruns**; the same 5,898,359,180 guest cycles as every other renderer | Confirmed |
+| CoreGS 2.0 core 2 on X11 (XWayland), 300 frames | 300 presents, exit 0 | Confirmed |
+| CTest, the combined build (host, Vulkan, VU AOT, CoreGS) | **268/268** | Confirmed |
+| Picture quality (upscaling, FXAA, deinterlacing) seen by a person | not yet | Unknown |
+
+### How to run it
+
+Build as in [L2 performance](L2-PERFORMANCE.md#how-to-build-it) with these changes: `-DGT4_LINUX_HW_GS=ON`, a capsule
+from `prepare_perf_runtime.py <out> --gs-stream`, and a port from
+`prepare_external_vulkan.py <out> --gs-stream-hooks --linux-surfaces`. Then, with the launcher's CoreGS 2.0 settings:
+
+```sh
+GT4_RENDERER=hw GT4_HW_CORE=2 GT4_HW_SCALE=3 GT4_HW_POSTFX=fxaa GT4_HW_SHADER_CACHE=<folder> \
+  <build dir>/gt4_linux_window <producer>/SCUS_973.28.elf --window --ntsc --disc <iso> --memcard <card.ps2>
+```
+
+`GT4_HW_SCALE` takes 1-12 (the internal resolution multiplier); leave out `GT4_HW_POSTFX` for no FXAA;
+`GT4_CORE2_FSR_SHARPNESS` sets sharpening as the launcher does. Without `GT4_RENDERER=hw` the same executable uses the
+native Vulkan backend (CoreGS 1.1).
+
+### Changes
+
+- `native/gs_stream/gs_stream_ipc.cpp`: the shared rings stay common; the Win32 session and child process are behind
+  `#ifdef _WIN32`, and on Linux every session or process call refuses with "the GS process transport ... is not
+  available on Linux yet" (GT4_RENDERER=pcsx2 and GT4_GS_CAPTURE need it; step L3).
+- `native/gs_stream/gs_stream_client.cpp`: compiles on Linux. A `QueryPerformanceCounter` of the same shape
+  (`CLOCK_MONOTONIC`, real values) keeps the timing code shared; thread CPU time from `CLOCK_THREAD_CPUTIME_ID`; the
+  GSdx failure dialog goes to the log; the GS executable hash and the child-window style are Windows-only.
+  New `attach_linux_window` (Linux only) gives an X11/Wayland window to the in-process sink.
+- `native/gs_stream/gs_stream_sink.hpp`, `native/hw_gs/hw_gs_stream_sink.cpp`: `InProcessSink::attach_linux_window`
+  (a member only on Linux, so the Windows struct is unchanged), calling `Backend::attach_x11` / `attach_wayland`.
+- `scripts/prepare_external_vulkan.py`: with both `--gs-stream-hooks` and `--linux-surfaces`, the derived `gs.cpp`
+  window hook calls `attach_linux_window` (checked, reversible anchor; `test_linux_surfaces.py` 4/4).
+- `cmake/LinuxHost.cmake`: the capsule may equal either pinned profile (`slice178-main-runtime` or
+  `slice191-gs-stream-runtime`); the second links `gt4_gs_stream_client` (with `GT4_GS_STREAM_HW`), the transport,
+  CoreGS's stream sink and `hw_gs_prepare.cpp`, and requires `GT4_LINUX_HW_GS=ON` and the matching port.
+- `native/linux/sdl_window.cpp`: the log names the renderer in use.
+
+### Not yet on Linux
+
+- The performance HUD (`GT4_HW_HUD`), the CPU sampler and the GS process (GSdx, `GT4_RENDERER=pcsx2`).
+- Save states with `GT4_RENDERER=hw` (refused by the GS stream hook, as on Windows).
+- The launcher's other per-game settings that the Windows `game_main.cpp` applies: `GT4_FORCE_480P`,
+  `GT4_FORCE_WIDESCREEN`, `GT4_DISPLAY_ASPECT`, frame skip, the game patches (next step).
+- lavapipe: 4 CoreGS tests fail there (2 segfaults); RADV passes all.

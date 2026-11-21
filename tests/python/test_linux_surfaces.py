@@ -26,6 +26,14 @@ class LinuxSurfaceHookTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'anchor changed'):
             port.apply_linux_surface_hooks(anchors[0] + anchors[0] + anchors[1])
 
+    def test_gs_stream_window_hook_takes_linux_windows(self):
+        hooked = port.apply_gs_stream_hooks(''.join(anchor + '// filler\n' for anchor, _ in port.GS_STREAM_HOOKS))
+        linux = port.apply_linux_gs_stream_hooks(hooked)
+        self.assertIn('attach_linux_window(kind, display, window, surface, width, height)', linux)
+        self.assertNotIn('kind == 3', linux)
+        with self.assertRaisesRegex(ValueError, 'anchor changed'):
+            port.apply_linux_gs_stream_hooks(linux)  # already rewritten: the Win32 anchor is gone
+
     @unittest.skipUnless((ROOT / 'private/references/ps2-web-recomp/runtime/src/gs/gpu/gpu.cpp').exists(),
                          'needs the pinned donor in private/references')
     def test_real_derivation_changes_only_the_surface_attach(self):
@@ -39,6 +47,11 @@ class LinuxSurfaceHookTests(unittest.TestCase):
             linux_gpu = (linux / 'gpu.cpp').read_text(encoding='utf-8')
             self.assertEqual(port.apply_linux_surface_hooks(default_gpu), linux_gpu)
             self.assertIn('reinterpret_cast<HWND>', default_gpu)
+            hooked, both = Path(folder) / 'hooked', Path(folder) / 'both'
+            port.prepare(hooked, gs_stream=True)
+            port.prepare(both, gs_stream=True, linux_surfaces=True)
+            hooked_gs = (hooked / 'gs.cpp').read_text(encoding='utf-8')
+            self.assertEqual(port.apply_linux_gs_stream_hooks(hooked_gs), (both / 'gs.cpp').read_text(encoding='utf-8'))
 
 
 if __name__ == '__main__':

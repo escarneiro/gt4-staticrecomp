@@ -357,7 +357,12 @@ int run_window(const std::function<int()> &emulate) {
   }
   // The presentation is 16:9 pillarbox, as on Windows.
   ps2::gs::gpu::set_widescreen(true);
-  std::fprintf(stderr, "[window] guest GPU output through native Vulkan (%s, %dx%d)\n", driver, width, height);
+  // GT4_RENDERER=hw: the port's GS stream hook gave the window to CoreGS 2.0 (native/hw_gs); otherwise the donor-derived
+  // native Vulkan backend (CoreGS 1.1) presents.
+  const char *renderer = std::getenv("GT4_RENDERER");
+  const bool coregs = renderer != nullptr && std::strcmp(renderer, "hw") == 0;
+  std::fprintf(stderr, "[window] guest output through %s (%s, %dx%d)\n",
+               coregs ? "CoreGS 2.0 (GT4_RENDERER=hw)" : "the native Vulkan backend (CoreGS 1.1)", driver, width, height);
   ps2::g_options.on_vblank = on_vblank;
   if (g_audio)
     ps2::set_audio_sink([](const std::int16_t *samples, std::size_t frames) { g_audio->push(samples, frames); });

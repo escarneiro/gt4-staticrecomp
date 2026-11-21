@@ -991,6 +991,27 @@ bool attach_window(std::uint64_t window, std::uint32_t width, std::uint32_t heig
   return true;
 }
 
+#ifndef _WIN32
+// TASK-074 (Linux): attach_window for an X11 window (kind 0) or a Wayland surface (kind 1).
+bool attach_linux_window(int kind, void *display, std::uint64_t window, void *surface, std::uint32_t width,
+                         std::uint32_t height) {
+  std::unique_lock<std::mutex> lock;
+  if (g_worker) lock = g_worker->drain();
+  std::string error;
+  const bool attached = kind == 0   ? backend().attach_x11(display, window, width, height, error)
+                        : kind == 1 ? backend().attach_wayland(display, surface, width, height, error)
+                                    : (error = "only X11 and Wayland windows exist on Linux", false);
+  if (!attached) {
+    std::fprintf(stderr, "[hw] window presentation refused: %s\n", error.c_str());
+    return false;
+  }
+  backend().resize_window(width, height);
+  g_window_attached.store(true, std::memory_order_relaxed);
+  std::fprintf(stderr, "[hw] window output through the HWR swapchain (%s)\n", kind == 0 ? "X11" : "Wayland");
+  return true;
+}
+#endif
+
 // TASK-080: the race view's display-aspect fill (protocol 1.3 CONTROL display_aspect in pcsx2 mode). Called on the EE
 // thread only when the request changes; the backend reads it atomically at its next present, so no drain is needed.
 std::uint64_t g_display_aspect_changes = 0;
@@ -1119,6 +1140,9 @@ const InProcessSink &hw_in_process_sink() {
     s.gs_reset = &gt4::hw::gs_reset;
     s.gif_reset = &gt4::hw::gif_reset;
     s.attach_window = &gt4::hw::attach_window;
+#ifndef _WIN32
+    s.attach_linux_window = &gt4::hw::attach_linux_window;
+#endif
     s.resize_window = &gt4::hw::resize_window;
     s.display_aspect = &gt4::hw::display_aspect;
     s.finish = &gt4::hw::finish;

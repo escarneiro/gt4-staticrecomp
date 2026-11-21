@@ -100,6 +100,33 @@ LINUX_SURFACE_HOOKS = [
 ]
 
 
+# TASK-074 (Linux, CoreGS): with both --gs-stream-hooks and --linux-surfaces, the derived gs.cpp passes an X11 or Wayland
+# window to the GS stream seam (GT4_RENDERER=hw takes it in process) instead of accepting only a Win32 window.
+LINUX_GS_STREAM_HOOKS = [
+    ('    if (' + GS_STREAM + 'stream_renderer()) return kind == 3 && ' + GS_STREAM +
+     'attach_window(window, width, height); // 3 = Win32\n',
+     '    if (' + GS_STREAM + 'stream_renderer()) return ' + GS_STREAM +
+     'attach_linux_window(kind, display, window, surface, width, height); // 0 = X11, 1 = Wayland\n'),
+]
+
+
+def apply_linux_gs_stream_hooks(source):
+    """Rewrites the GS stream seam's window hook in an already hooked gs.cpp for X11/Wayland; checks that it reverses."""
+    result = source
+    for anchor, replacement in LINUX_GS_STREAM_HOOKS:
+        if result.count(anchor) != 1:
+            raise ValueError(f'Linux GS stream anchor changed in the derived gs.cpp: {anchor[:60]!r}')
+        result = result.replace(anchor, replacement)
+    inverse = result
+    for anchor, replacement in reversed(LINUX_GS_STREAM_HOOKS):
+        if inverse.count(replacement) != 1:
+            raise ValueError('Unexpected Linux GS stream hook reversal')
+        inverse = inverse.replace(replacement, anchor)
+    if inverse != source:
+        raise ValueError('Linux GS stream hooks do not reverse to the input')
+    return result
+
+
 def apply_linux_surface_hooks(source):
     """Splices the TASK-074 L2 X11/Wayland surface attach into the derived gpu.cpp; checks that it reverses."""
     result = source
@@ -189,6 +216,8 @@ std::uint32_t g_decoded_used = 0;'''
     graphics_source = graphics_source.replace('"gpu/gpu.hpp"', '"gpu.hpp"')
     if gs_stream:
         graphics_source = apply_gs_stream_hooks(graphics_source)
+        if linux_surfaces:
+            graphics_source = apply_linux_gs_stream_hooks(graphics_source)
     (output / 'gs.cpp').write_text(graphics_source, encoding='utf-8')
     host = donor.parents[3] / 'host/main.cpp'
     host_source = host.read_text(encoding='utf-8')

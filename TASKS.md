@@ -1616,6 +1616,12 @@ RADV (1 skipped). A Mesa RADV bug (push-constant array indexed per invocation) b
 now reads the array through constant indices. Not yet connected to the game. Clean room kept (no PCSX2 material read).
 Details: [docs/linux/L2-COREGS.md](docs/linux/L2-COREGS.md).
 
+Progress (2026-11-21, same branch, CoreGS 2.0 part 2): the game runs on CoreGS 2.0 in a Linux window (`GT4_RENDERER=hw`,
+`GT4_HW_CORE=2`): `--gs-stream` capsule equal to the slice191 pins, the GS stream client compiled on Linux (GS process half
+refused there), an X11/Wayland attach through the derived port's stream hook. Core 2 at 3x with FXAA and sound: 1,200 of
+1,200 presents, 1,199 deinterlaced, all intervals 16-17 ms, 0 late, 0 underruns, identical guest cycles. Combined CTest
+268/268. Not yet seen by the tester.
+
 ### TASK-018 — Racing wheels
 
 Study (2026-11-04): Luan Antony's wheel, DFP and force feedback roadmap (`docs/studies/WHEEL-FFB-ROADMAP.md`, PR #151, issue

@@ -381,13 +381,33 @@ if(GT4_LINUX_PORT_DIR OR GT4_LINUX_SHADER_DIR)
         if(NOT gt4_capsule_files STREQUAL gt4_capsule_expected)
             message(FATAL_ERROR "GT4_LINUX_RUNTIME_CAPSULE must hold exactly the --mtvu sources and runtime.json")
         endif()
-        file(READ "${CMAKE_SOURCE_DIR}/docs/inputs/slice178-main-runtime.json" gt4_capsule_manifest)
-        foreach(source IN LISTS gt4_capsule_sources)
-            string(JSON gt4_capsule_expected_hash GET "${gt4_capsule_manifest}" source_sha256 "${source}")
-            file(SHA256 "${GT4_LINUX_RUNTIME_CAPSULE}/${source}" gt4_capsule_actual_hash)
-            if(NOT gt4_capsule_actual_hash STREQUAL gt4_capsule_expected_hash)
-                message(FATAL_ERROR "Capsule ${source} differs from docs/inputs/slice178-main-runtime.json")
+        # Two pinned profiles: prepare_perf_runtime.py --mtvu (slice178) and --gs-stream (slice191: the same plus the GS
+        # stream hooks in gif.cpp and hw.cpp, which CoreGS needs). The capsule must equal one of them in every source.
+        set(gt4_capsule_profile "")
+        foreach(candidate IN ITEMS slice178-main-runtime slice191-gs-stream-runtime)
+            file(READ "${CMAKE_SOURCE_DIR}/docs/inputs/${candidate}.json" gt4_capsule_manifest)
+            set(gt4_capsule_matches ON)
+            foreach(source IN LISTS gt4_capsule_sources)
+                string(JSON gt4_capsule_expected_hash GET "${gt4_capsule_manifest}" source_sha256 "${source}")
+                file(SHA256 "${GT4_LINUX_RUNTIME_CAPSULE}/${source}" gt4_capsule_actual_hash)
+                if(NOT gt4_capsule_actual_hash STREQUAL gt4_capsule_expected_hash)
+                    set(gt4_capsule_matches OFF)
+                endif()
+            endforeach()
+            if(gt4_capsule_matches)
+                set(gt4_capsule_profile "${candidate}")
+                break()
             endif()
+        endforeach()
+        if(NOT gt4_capsule_profile)
+            message(FATAL_ERROR "GT4_LINUX_RUNTIME_CAPSULE differs from docs/inputs/slice178-main-runtime.json and "
+                                "slice191-gs-stream-runtime.json; derive it with prepare_perf_runtime.py --mtvu or --gs-stream")
+        endif()
+        message(STATUS "Linux runtime capsule: ${gt4_capsule_profile} (every source equals its pin)")
+        if(gt4_capsule_profile STREQUAL "slice191-gs-stream-runtime" AND NOT GT4_LINUX_HW_GS)
+            message(FATAL_ERROR "The --gs-stream capsule feeds CoreGS: configure with -DGT4_LINUX_HW_GS=ON")
+        endif()
+        foreach(source IN LISTS gt4_capsule_sources)
             set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GT4_LINUX_RUNTIME_CAPSULE}/${source}")
             # The capsule copy replaces the donor file (gif.cpp lives in gs/ in the donor).
             set(gt4_donor_path "${GT4_DONOR}/runtime/src/${source}")
@@ -466,6 +486,28 @@ if(GT4_LINUX_PORT_DIR OR GT4_LINUX_SHADER_DIR)
         target_include_directories(gt4_ps2runtime_vulkan PUBLIC "${CMAKE_SOURCE_DIR}/tools/vu_recomp/src")
         target_compile_definitions(gt4_ps2runtime_vulkan PUBLIC GT4_PERF_PROBE)
         target_link_libraries(gt4_ps2runtime_vulkan PUBLIC gt4_mtvu_runtime)
+        if(gt4_capsule_profile STREQUAL "slice191-gs-stream-runtime")
+            # TASK-074 CoreGS: the GS stream seam with GT4_RENDERER=hw taken in process by CoreGS (native/hw_gs). The
+            # GS process transport compiles but refuses on Linux (gs_stream_ipc.cpp); the port must come from
+            # prepare_external_vulkan.py --gs-stream-hooks --linux-surfaces.
+            file(STRINGS "${GT4_LINUX_PORT_DIR}/gs.cpp" gt4_port_stream_hook REGEX "attach_linux_window")
+            if(NOT gt4_port_stream_hook)
+                message(FATAL_ERROR "The --gs-stream capsule needs a port derived with --gs-stream-hooks --linux-surfaces")
+            endif()
+            gt4_host_library(gt4_gs_stream gs_stream/gs_stream_ipc.cpp gs_stream/gs_stream_file.cpp
+                gs_stream/gs_readback_probe.cpp)
+            target_include_directories(gt4_gs_stream PUBLIC "${GT4_NATIVE}/gs_stream")
+            add_library(gt4_hw_stream_sink STATIC "${GT4_HW}/hw_gs_stream_sink.cpp" "${GT4_HW}/hw_gs_prepare.cpp"
+                "${GT4_HW}/hw_cpu_sampler_linux.cpp")
+            target_include_directories(gt4_hw_stream_sink PRIVATE "${GT4_NATIVE}")
+            target_link_libraries(gt4_hw_stream_sink PUBLIC gt4_hw_backend gt4_quickfix)
+            gt4_hw_compile(gt4_hw_stream_sink)
+            gt4_host_library(gt4_gs_stream_client gs_stream/gs_stream_client.cpp)
+            target_link_libraries(gt4_gs_stream_client PUBLIC gt4_gs_stream gt4_perf_probe gt4_install_paths gt4_quickfix
+                gt4_hw_stream_sink)
+            target_compile_definitions(gt4_gs_stream_client PRIVATE GT4_GS_STREAM_HW INTERFACE GT4_GS_STREAM_CLIENT)
+            target_link_libraries(gt4_ps2runtime_vulkan PUBLIC gt4_gs_stream_client)
+        endif()
 
         # The AOT controls of tools/vu_recomp (registered as in the root CMakeLists.txt): the emitter's fixture corpus
         # against the donor interpreter, and the release VU1/VU0 tables in the linked runtime against the interpreter.
