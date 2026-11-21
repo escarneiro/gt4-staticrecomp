@@ -19,7 +19,8 @@ Gameplay has not been tested by a person yet.
 | Frame pacing, paced + MAILBOX | the same: 1,199 of 1,199 in 16-17 ms, 0 late, 0 underruns, queue median 2,909 | Confirmed |
 | Earlier behaviour (`GT4_PACING=audio`) + FIFO, for comparison | uneven: 269 intervals under 12 ms, 837 at 20-25 ms, 67 at 18-20 ms; queue median 3,328 | Confirmed |
 | Linux frame clock (`native_linux_pacing`) | 60 grid waits: never early, lateness median 0.1 us, maximum 51 us | Confirmed |
-| Gameplay by a person (picture, sound, keyboard, controller, rumble, fullscreen) | not done yet | Unknown |
+| Gameplay by a tester (2026-11-20/21) | plays smoothly with the AOT build, sound plays well, no flicker; a DualShock 4 works through SDL3 | Confirmed (tester report) |
+| Rumble, fullscreen toggle, Xbox and other controllers, `GT4_PAD` selection | not reported | Unknown |
 
 ## How to run it
 
