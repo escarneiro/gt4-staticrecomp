@@ -110,6 +110,11 @@ public:
   void wait_submissions();
   void wait_idle();
   void attach_window(HWND window, std::uint32_t width, std::uint32_t height);
+#ifndef _WIN32
+  // TASK-074 L2: Linux window-system surfaces from the native handles the host's SDL3 window reports.
+  void attach_x11(void *display, std::uint64_t window, std::uint32_t width, std::uint32_t height);
+  void attach_wayland(void *display, void *surface, std::uint32_t width, std::uint32_t height);
+#endif
   void resize(std::uint32_t width, std::uint32_t height);
   void set_aspect(Aspect aspect) { aspect_ = aspect; }
   bool has_window() const { return window_ != nullptr; }
@@ -154,6 +159,12 @@ private:
                       VkPipelineStageFlags destination, VkAccessFlags writes,
                       VkAccessFlags reads);
   void rebuild_swapchain();
+#ifndef _WIN32
+  // Records the attached window (any non-null marker; window_ only tells has_window()), checks presentation support of
+  // the surface just created and builds the swapchain.
+  void finish_linux_attach(const void *marker, std::uint32_t width, std::uint32_t height, const char *system);
+  bool surface_instance_ = false; // VK_KHR_surface enabled (a window-system extension was available)
+#endif
   void destroy_image();
   void image_barrier(VkCommandBuffer command, VkImage image,
                      VkImageLayout old_layout, VkImageLayout new_layout,

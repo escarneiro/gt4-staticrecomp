@@ -148,7 +148,7 @@ See [GS renderer options](docs/GS-RENDERER-OPTIONS.md) and [GSDX-PLAN](docs/GSDX
 | TASK‑136 | Simple onboarding: a new install uses CoreGS 2.0 when the PC runs it, GSdx becomes optional and is downloaded only when the card needs it | 🧪 Built, waits for the owner's test (branch `task/136-simple-onboarding`, 2026-11-02) |
 | TASK‑137 | The launcher links the disc image and no longer copies it; an image that moved asks to be chosen again; installs with a copy keep working | 🧪 Built, waits for the owner's test (branch `task/137-link-disc-image`, candidate 381, 2026-11-02) |
 | TASK‑138 | A portable folder carries its disc image (relative link); accented paths on CoreGS 2.0; the GSdx fallback goes to CoreGS 2.0; a release can be started directly | 🧪 Built, waits for the owner's test (branch `task/138-relative-image-link`, candidate 382, 2026-11-02); GSdx in an accented folder not confirmed |
-| TASK‑074 | Native Linux x86-64 build (SDL3 platform layer, Linux gt4-gs owning the window, Linux packaging) | 🔧 L1 in progress (2026-11-20, branch `task/074-linux-host-build`): host-only CMake build 36/36 CTest (clang, GCC); EE sources regenerated on Linux byte-identical to the frozen inventory, Linux candidate `libps2game.a`, headless boot to the name entry; native Vulkan GS backend headless on RADV and lavapipe, CTest 39/39; window, input and audio are L2 ([plan](docs/linux/PLAN.md), [host build](docs/linux/HOST-BUILD.md), [game library](docs/linux/L1-GAME-LIBRARY.md)) |
+| TASK‑074 | Native Linux x86-64 build (SDL3 platform layer, Linux gt4-gs owning the window, Linux packaging) | 🔧 L1 in progress (2026-11-20, branch `task/074-linux-host-build`): host-only CMake build 36/36 CTest (clang, GCC); EE sources regenerated on Linux byte-identical to the frozen inventory, Linux candidate `libps2game.a`, headless boot to the name entry; native Vulkan GS backend headless on RADV and lavapipe. 🔧 L2 started: the game runs in an SDL3 window on Wayland and X11 with sound and controls (preview, base game only; owner gameplay test pending), CTest 40/40 ([plan](docs/linux/PLAN.md), [host build](docs/linux/HOST-BUILD.md), [game library](docs/linux/L1-GAME-LIBRARY.md)) |
 | 🧩 | **gt4-gs 1.0.0, the first stable renderer release** (with TASK‑060/061/062; settings allow-list enforced) | ✅ Published 2026-10-16 (`gt4gs-v1.0.0`, zip sha256 `2e878019...`) |
 | 🚀 | **First stable release (1.0.0) on GitHub** (after TASK‑044, TASK‑043 and the owner's end-to-end test) | 📋 Planned |
 
@@ -1583,6 +1583,15 @@ through the Vulkan GS backend: lavapipe frames byte-identical to the CPU rasteri
 channel in alpha-blended pixels only (deterministic, not a race; Windows AMD behaviour Unknown). A GCC-built game
 library boots with identical cycles and frames. Not checked yet: the Windows build of these changes. Details:
 [docs/linux/L1-VULKAN.md](docs/linux/L1-VULKAN.md).
+
+Progress (2026-11-20, same branch, L2 first part): `native/linux/sdl_window.cpp` implements `window.hpp` with SDL3 in the
+Windows host's one-thread VBlank shape: X11 or Wayland handles go to new `Context::attach_x11` / `attach_wayland`
+(the port is derived with `prepare_external_vulkan.py --linux-surfaces`; the default derivation is byte-identical),
+keyboard through the controls table and a fixture-checked virtual-key to HID scancode table, gamepads through
+`read_sdl_gamepad` (moved unchanged to `native/sdl_gamepad.cpp`), 48 kHz audio pacing the game, F11/Alt+Enter
+fullscreen. Wayland and X11 both present 595 frames in 600 at 60 Hz and exit with code 0. Not yet: the frame clock and
+audio rate control, game patches, wheels, achievements, the probe. Not checked: the Windows build; gameplay by a person.
+Details: [docs/linux/L2-WINDOW.md](docs/linux/L2-WINDOW.md).
 
 ### TASK-018 — Racing wheels
 

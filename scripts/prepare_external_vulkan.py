@@ -83,13 +83,47 @@ def apply_gs_stream_hooks(source):
     return result
 
 
+# TASK-074 L2 Linux surfaces: (anchor, replacement) pairs for the derived gpu.cpp, applied only with --linux-surfaces
+# (the default Win32 derivation is unchanged). attach_surface then accepts the X11 and Wayland handles of the Linux host
+# (native/linux/sdl_window.cpp) instead of a Win32 window. Each anchor must occur exactly once, and removing the
+# replacements must restore the input.
+LINUX_SURFACE_HOOKS = [
+    ('    if (target.kind != SurfaceTarget::Win32) throw std::runtime_error("Native Vulkan supports only Win32 surfaces");\n'
+     '    g_vulkan.attach_window(reinterpret_cast<HWND>(target.window), target.width, target.height);\n',
+     '    if (target.kind == SurfaceTarget::X11)\n'
+     '        g_vulkan.attach_x11(target.display, target.window, target.width, target.height);\n'
+     '    else if (target.kind == SurfaceTarget::Wayland)\n'
+     '        g_vulkan.attach_wayland(target.display, target.surface, target.width, target.height);\n'
+     '    else\n'
+     '        throw std::runtime_error("Native Vulkan on Linux supports X11 and Wayland surfaces");\n'),
+    ('"[vulkan] Win32 presentations=%llu\\n"', '"[vulkan] Linux presentations=%llu\\n"'),
+]
+
+
+def apply_linux_surface_hooks(source):
+    """Splices the TASK-074 L2 X11/Wayland surface attach into the derived gpu.cpp; checks that it reverses."""
+    result = source
+    for anchor, replacement in LINUX_SURFACE_HOOKS:
+        if result.count(anchor) != 1:
+            raise ValueError(f'Linux surface anchor changed in the derived gpu.cpp: {anchor[:60]!r}')
+        result = result.replace(anchor, replacement)
+    inverse = result
+    for anchor, replacement in reversed(LINUX_SURFACE_HOOKS):
+        if inverse.count(replacement) != 1:
+            raise ValueError('Unexpected Linux surface hook reversal')
+        inverse = inverse.replace(replacement, anchor)
+    if inverse != source:
+        raise ValueError('Linux surface hooks do not reverse to the input')
+    return result
+
+
 def replace_section(source, start, end, replacement):
     first = source.index(start)
     last = source.index(end, first)
     return source[:first] + replacement + '\n\n' + source[last:]
 
 
-def prepare(output, assets_root=None, gs_stream=False):
+def prepare(output, assets_root=None, gs_stream=False, linux_surfaces=False):
     output = output.resolve()
     assets_root = Path(assets_root or ROOT).resolve()
     # A worktree has no private/ of its own: the derived port may live in the assets checkout's private/.
@@ -140,6 +174,8 @@ std::uint32_t g_decoded_used = 0;'''
     source = source[:source.index('void flush() {')] + (replacements / 'gpu_tail.inc').read_text() + '\n}\n'
     if 'wgpu' in source.lower() or 'WGPU' in source:
         raise ValueError('Unexpected WebGPU reference remains after the native port')
+    if linux_surfaces:
+        source = apply_linux_surface_hooks(source)
     source = '// MIT donor batching, derived from pinned ps2-web-recomp gpu.cpp; see THIRD_PARTY.md.\n' + source
     header = (donor / 'gpu.hpp').read_text().replace('../gs.hpp', 'gs.hpp')
     header = header.replace('enum Kind { X11, Wayland, Canvas }', 'enum Kind { X11, Wayland, Canvas, Win32 }')
@@ -168,5 +204,7 @@ if __name__ == '__main__':
     parser.add_argument('--assets-root', type=Path)
     parser.add_argument('--gs-stream-hooks', action='store_true',
                         help='Splice the TASK-035 GS stream seam into gs.cpp (GT4_RENDERER=pcsx2; slice191)')
+    parser.add_argument('--linux-surfaces', action='store_true',
+                        help='Attach X11 and Wayland surfaces instead of Win32 windows (TASK-074 L2, Linux host)')
     options = parser.parse_args()
-    prepare(options.output, options.assets_root, options.gs_stream_hooks)
+    prepare(options.output, options.assets_root, options.gs_stream_hooks, options.linux_surfaces)

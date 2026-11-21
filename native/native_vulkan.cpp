@@ -16,6 +16,16 @@
 
 #ifndef _WIN32
 #include <dlfcn.h>
+// TASK-074 L2: the X11 and Wayland surface structures. The two Xlib types and the two Wayland types the Vulkan
+// platform headers name are declared here instead of including Xlib.h (whose macros such as None, Bool and Status
+// would leak into this file) and wayland-client.h. Display and Window match Xlib's own definitions.
+typedef struct _XDisplay Display;
+typedef unsigned long Window;
+typedef unsigned long VisualID;
+struct wl_display;
+struct wl_surface;
+#include <vulkan/vulkan_wayland.h>
+#include <vulkan/vulkan_xlib.h>
 #endif
 
 #include "install_paths.hpp"
@@ -67,6 +77,12 @@ PresentationRect presentation_rect_ratio(std::uint32_t width, std::uint32_t heig
 }
 
 namespace {
+// The window system named in the swapchain messages.
+#ifdef _WIN32
+constexpr const char *kWindowSystem = "Win32";
+#else
+constexpr const char *kWindowSystem = "Linux";
+#endif
 // TASK-080: race view presentation (set_race_view_presentation). The ratio is stored as its bit pattern.
 std::atomic<bool> g_race_view_fill{false};
 std::atomic<std::uint64_t> g_race_view_ratio_bits{0};
@@ -88,7 +104,8 @@ namespace {
 #ifdef _WIN32
 #define VULKAN_PLATFORM_FUNCTIONS(X) X(vkCreateWin32SurfaceKHR)
 #else
-#define VULKAN_PLATFORM_FUNCTIONS(X)
+// Loaded when their extension is enabled, else null; attach_x11 / attach_wayland check before use.
+#define VULKAN_PLATFORM_FUNCTIONS(X) X(vkCreateXlibSurfaceKHR) X(vkCreateWaylandSurfaceKHR)
 #endif
 #define VULKAN_CORE_FUNCTIONS(X) \
   X(vkCreateInstance) \
@@ -123,7 +140,6 @@ namespace {
   X(vkCmdBindPipeline) \
   X(vkCmdBindDescriptorSets) \
   X(vkCmdDispatch) \
-  VULKAN_PLATFORM_FUNCTIONS(X) \
   X(vkCreateImage) \
   X(vkBindImageMemory) \
   X(vkCmdCopyBufferToImage) \
@@ -168,7 +184,8 @@ namespace {
   X(vkAcquireNextImageKHR)
 #define VULKAN_FUNCTIONS(X) \
   VULKAN_CORE_FUNCTIONS(X) \
-  VULKAN_PRESENT_FUNCTIONS(X)
+  VULKAN_PRESENT_FUNCTIONS(X) \
+  VULKAN_PLATFORM_FUNCTIONS(X)
 // clang-format on
 
 #define DECLARE_FUNCTION(name) PFN_##name name = nullptr;
@@ -327,9 +344,11 @@ void Context::initialize(const std::filesystem::path &build_time_shaders) {
   const InstanceChoice instance_choice =
       select_instance_extensions(available_instance, force_baseline_);
 #else
-  // TASK-074 L1: headless, so no surface extension and no swapchain maintenance family; L2 selects the SDL3 surface
-  // extensions here.
-  const InstanceChoice instance_choice{};
+  // TASK-074 L2: VK_KHR_surface with the X11 and Wayland surface extensions when the driver has them, else a headless
+  // instance (no window can be attached then).
+  const InstanceChoice instance_choice =
+      select_linux_instance_extensions(available_instance, force_baseline_);
+  surface_instance_ = !instance_choice.extensions.empty();
 #endif
   maintenance_family_ = instance_choice.family;
   std::vector<const char *> extensions;
@@ -492,6 +511,9 @@ void Context::initialize(const std::filesystem::path &build_time_shaders) {
   VULKAN_FUNCTIONS(REQUIRE_FUNCTION)
 #else
   VULKAN_CORE_FUNCTIONS(REQUIRE_FUNCTION)
+  if (surface_instance_) {
+    VULKAN_PRESENT_FUNCTIONS(REQUIRE_FUNCTION)
+  }
 #endif
 #undef REQUIRE_FUNCTION
   vkGetDeviceQueue(device_, queue_family_, 0, &queue_);
@@ -891,7 +913,45 @@ void Context::wait_idle() {
 
 #ifndef _WIN32
 void Context::attach_window(HWND, std::uint32_t, std::uint32_t) {
-  throw std::runtime_error("No window surface on Linux yet (TASK-074 L2); the Linux build is headless");
+  throw std::runtime_error("Win32 windows do not exist on Linux; attach an X11 or Wayland window");
+}
+
+void Context::attach_x11(void *display, std::uint64_t window, std::uint32_t width, std::uint32_t height) {
+  if (!display || !window || window_)
+    throw std::runtime_error("Invalid or already attached X11 window");
+  if (!vkCreateXlibSurfaceKHR)
+    throw std::runtime_error("The Vulkan driver lacks VK_KHR_xlib_surface");
+  VkXlibSurfaceCreateInfoKHR info{};
+  info.sType = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR;
+  info.dpy = static_cast<Display *>(display);
+  info.window = static_cast<Window>(window);
+  check(vkCreateXlibSurfaceKHR(instance_, &info, nullptr, &surface_), "X11 Vulkan surface");
+  finish_linux_attach(reinterpret_cast<const void *>(static_cast<std::uintptr_t>(window)), width, height, "X11");
+}
+
+void Context::attach_wayland(void *display, void *surface, std::uint32_t width, std::uint32_t height) {
+  if (!display || !surface || window_)
+    throw std::runtime_error("Invalid or already attached Wayland surface");
+  if (!vkCreateWaylandSurfaceKHR)
+    throw std::runtime_error("The Vulkan driver lacks VK_KHR_wayland_surface");
+  VkWaylandSurfaceCreateInfoKHR info{};
+  info.sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR;
+  info.display = static_cast<wl_display *>(display);
+  info.surface = static_cast<wl_surface *>(surface);
+  check(vkCreateWaylandSurfaceKHR(instance_, &info, nullptr, &surface_), "Wayland Vulkan surface");
+  finish_linux_attach(surface, width, height, "Wayland");
+}
+
+void Context::finish_linux_attach(const void *marker, std::uint32_t width, std::uint32_t height, const char *system) {
+  window_ = reinterpret_cast<HWND>(const_cast<void *>(marker));
+  window_width_ = width;
+  window_height_ = height;
+  VkBool32 supported = VK_FALSE;
+  check(vkGetPhysicalDeviceSurfaceSupportKHR(physical_, queue_family_, surface_, &supported), "surface support");
+  if (!supported)
+    throw std::runtime_error(std::string("Selected GPU queue cannot present to this ") + system + " surface");
+  std::fprintf(stderr, "[vulkan] attached a %s window surface\n", system);
+  rebuild_swapchain();
 }
 #else
 void Context::attach_window(HWND window, std::uint32_t width,
@@ -940,8 +1000,8 @@ void Context::rebuild_swapchain() {
   if (!(capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT) ||
       !(capabilities.supportedCompositeAlpha &
         VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR))
-    throw std::runtime_error(
-        "Win32 surface does not support opaque transfer presentation");
+    throw std::runtime_error(std::string(kWindowSystem) +
+                             " surface does not support opaque transfer presentation");
   std::uint32_t count = 0;
   check(vkGetPhysicalDeviceSurfaceFormatsKHR(physical_, surface_, &count,
                                              nullptr),
@@ -1053,9 +1113,9 @@ void Context::rebuild_swapchain() {
             "per-image present semaphore");
   }
   std::fprintf(stderr,
-               "[vulkan] Win32 swapchain %ux%u, format=%d, requested usage=0x%x "
+               "[vulkan] %s swapchain %ux%u, format=%d, requested usage=0x%x "
                "(surface supports 0x%x); GPU blit, no temporal field blend\n",
-               extent_.width, extent_.height, static_cast<int>(format),
+               kWindowSystem, extent_.width, extent_.height, static_cast<int>(format),
                static_cast<unsigned>(requested_usage),
                static_cast<unsigned>(capabilities.supportedUsageFlags));
 }

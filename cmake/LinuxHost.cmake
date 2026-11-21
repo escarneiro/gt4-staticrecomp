@@ -206,6 +206,15 @@ gt4_host_fixture(cursor_autohide_fixture cursor_autohide_fixture.cpp)
 target_link_libraries(cursor_autohide_fixture PRIVATE gt4_quickfix)
 add_test(NAME native_cursor_autohide COMMAND $<TARGET_FILE:cursor_autohide_fixture>)
 
+# TASK-074 L2: the controls table and its keyboard scancodes (pure), used by the Linux window host.
+gt4_host_library(gt4_controls controls.cpp keyboard_scancodes.cpp)
+find_package(SDL3 CONFIG QUIET)
+if(SDL3_FOUND)
+    gt4_host_fixture(keyboard_scancodes_fixture keyboard_scancodes_fixture.cpp)
+    target_link_libraries(keyboard_scancodes_fixture PRIVATE gt4_controls SDL3::Headers)
+    add_test(NAME native_keyboard_scancodes COMMAND $<TARGET_FILE:keyboard_scancodes_fixture>)
+endif()
+
 # The guest-hook fixtures assert the v2.00 chains (GT4_HOOK_FIXTURE_LIB, as in the Windows tree).
 foreach(hook IN ITEMS race_display race_widescreen display_aspect camera_360 fov_adjust trigger_range flare_limits)
     gt4_host_fixture(${hook}_fixture ${hook}_fixture.cpp)
@@ -341,6 +350,24 @@ if(GT4_LINUX_PORT_DIR OR GT4_LINUX_SHADER_DIR)
         PASS_REGULAR_EXPRESSION "PASS: real Vulkan" WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 
     if(GT4_LINUX_PRODUCER)
+        # TASK-074 L2: the game in an SDL3 window (native/linux/sdl_window.cpp). It needs a port derived with
+        # scripts/prepare_external_vulkan.py --linux-surfaces, whose attach_surface takes X11 and Wayland handles.
+        file(STRINGS "${GT4_LINUX_PORT_DIR}/gpu.cpp" gt4_linux_surface_attach REGEX "g_vulkan\\.attach_x11")
+        if(NOT SDL3_FOUND)
+            message(STATUS "gt4_linux_window not built: SDL3 (CMake package) not found")
+        elseif(NOT gt4_linux_surface_attach)
+            message(STATUS "gt4_linux_window not built: derive GT4_LINUX_PORT_DIR with --linux-surfaces")
+        else()
+            add_executable(gt4_linux_window "${GT4_LINUX_PORT_DIR}/main.cpp" "${GT4_NATIVE}/linux/sdl_window.cpp"
+                "${GT4_NATIVE}/sdl_gamepad.cpp")
+            target_compile_definitions(gt4_linux_window PRIVATE PS2_WINDOW)
+            set_source_files_properties("${GT4_LINUX_PORT_DIR}/main.cpp" TARGET_DIRECTORY gt4_linux_window
+                PROPERTIES COMPILE_OPTIONS "-include;${GT4_NATIVE}/host_compat.hpp")
+            target_compile_options(gt4_linux_window PRIVATE ${GT4_WARNINGS})
+            target_link_libraries(gt4_linux_window PRIVATE gt4_controls gt4_pad_mapping SDL3::SDL3
+                "$<LINK_GROUP:RESCAN,${gt4_linux_library},gt4_ps2runtime_vulkan>")
+        endif()
+
         # The port's main.cpp is the donor host with PS2_GS=gpu forced (no silent CPU raster fallback); its
         # _putenv_s call comes from native/host_compat.hpp.
         add_executable(gt4_vulkan_headless_smoke "${GT4_LINUX_PORT_DIR}/main.cpp")
