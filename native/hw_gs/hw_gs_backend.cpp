@@ -289,14 +289,7 @@ struct Backend::Impl {
   // TASK-135: the performance HUD (GT4_HW_HUD=1); null when off.
   const bool hud_wanted = [] {
     const char *text = std::getenv("GT4_HW_HUD");
-#ifndef _WIN32
-    // TASK-074: the HUD's font and machine readings are Windows APIs (hud/hw_hud_system.cpp); Linux has none yet.
-    if (text != nullptr && std::strcmp(text, "1") == 0)
-      std::fprintf(stderr, "[hwr] GT4_HW_HUD=1: the performance HUD is not available on Linux yet; it stays off\n");
-    return false;
-#else
     return text != nullptr && std::strcmp(text, "1") == 0;
-#endif
   }();
   std::unique_ptr<gt4::hw::hud::Layer> hud_layer;
 
@@ -1012,7 +1005,7 @@ struct Backend::Impl {
 #ifdef _WIN32
       hud_layer = std::make_unique<gt4::hw::hud::Layer>(physical, device, frame_slots, window, report.device_name, scale != nullptr ? scale : "");
 #else
-      // Never reached on Linux (hud_wanted is false); the window marker is passed as the layer's opaque handle.
+      // TASK-074 (Linux): the window marker is the layer's opaque handle (hud/hw_hud_system_linux.cpp does not use it).
       hud_layer = std::make_unique<gt4::hw::hud::Layer>(physical, device, frame_slots, const_cast<void *>(window),
                                                         report.device_name, scale != nullptr ? scale : "");
 #endif

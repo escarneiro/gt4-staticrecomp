@@ -5,7 +5,8 @@
 #     Vulkan structures are initialised with their sType only, as the Windows file allows for its fixtures);
 #   - Vulkan comes from the system (headers; the loader is dlopened at run time), not a Vulkan SDK import library;
 #   - Windows-only files are replaced: hud/hw_hud_system.cpp (GDI font, PDH counters) by hud/hw_hud_system_linux.cpp
-#     (the HUD stays off on Linux), hw_cpu_sampler.cpp (Win32 thread sampling) by hw_cpu_sampler_linux.cpp (off);
+#     (FreeType and fontconfig for the font, /proc for the readings), hw_cpu_sampler.cpp (Win32 thread sampling) by
+#     hw_cpu_sampler_linux.cpp (off);
 #   - not built: hw_gs_smoke (a Win32 window test tool), hw_cpu_sampler_fixture (tests the Windows sampler);
 #   - the shaders use the system glslangValidator. The Windows build pins its glslangValidator.exe by hash (IN-201);
 #     no Linux binary is pinned yet, so its version and hash are printed and passed on as the expected values.
@@ -99,10 +100,15 @@ foreach(hw_writeback_test IN ITEMS hw_flat_provoking hw_sprite_corners hw_presen
     set_tests_properties(${hw_writeback_test} PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
 endforeach()
 
+find_package(Freetype REQUIRED)
+find_package(Fontconfig REQUIRED)
 add_library(gt4_hw_hud STATIC "${GT4_HW}/hud/hw_hud.cpp" "${GT4_HW}/hud/hw_hud_system_linux.cpp")
+target_link_libraries(gt4_hw_hud PUBLIC Freetype::Freetype Fontconfig::Fontconfig Threads::Threads)
 gt4_hw_compile(gt4_hw_hud)
-# hw_hud_fixture is not registered: two of its checks need Windows to draw the font (GDI), which Linux does not have;
-# the HUD stays off on Linux (hw_gs_backend.cpp).
+# The fixture's font checks are labelled "Windows draws the font"; on Linux they check the FreeType atlas the same way.
+add_executable(hw_hud_fixture "${GT4_HW}/hud/hw_hud_fixture.cpp")
+target_link_libraries(hw_hud_fixture PRIVATE gt4_hw_hud)
+add_test(NAME hw_hud COMMAND hw_hud_fixture)
 
 add_library(gt4_hw_backend STATIC "${GT4_HW}/hw_gs_backend.cpp" "${GT4_HW}/hw_gs_dispatch.cpp"
     "${GT4_HW}/hud/hw_hud_layer.cpp")

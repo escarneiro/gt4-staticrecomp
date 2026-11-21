@@ -17,6 +17,7 @@
 
 #include "controls.hpp"
 #include "display_aspect.hpp"
+#include "display_refresh.hpp"
 #include "frame_clock.hpp"
 #include "gpu.hpp"
 #include "gs/gs.hpp"
@@ -129,6 +130,13 @@ void open_gamepad() {
     std::fprintf(stderr, "[input] gamepad: %s\n", SDL_GetGamepadName(g_pad));
 }
 
+// The refresh rate of the display that shows the window, for the CoreGS performance HUD (native/display_refresh.hpp).
+void publish_refresh_rate() {
+  const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(g_window));
+  const std::uint32_t hz = mode != nullptr && mode->refresh_rate > 1.0f ? static_cast<std::uint32_t>(mode->refresh_rate + 0.5f) : 0;
+  gt4::display::g_refresh_hz.store(hz, std::memory_order_relaxed);
+}
+
 void toggle_fullscreen() {
   const bool fullscreen = (SDL_GetWindowFlags(g_window) & SDL_WINDOW_FULLSCREEN) != 0;
   SDL_SetWindowFullscreen(g_window, !fullscreen);
@@ -159,6 +167,10 @@ void poll_events() {
                              static_cast<std::uint32_t>(event.window.data2));
       gt4::display_aspect::set_window_client_size(static_cast<std::uint32_t>(event.window.data1),
                                                   static_cast<std::uint32_t>(event.window.data2));
+      break;
+    case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
+    case SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED:
+      publish_refresh_rate();
       break;
     case SDL_EVENT_GAMEPAD_ADDED:
       open_gamepad();
@@ -332,6 +344,7 @@ bool open_window(bool fullscreen) {
   }
   if (fullscreen)
     SDL_HideCursor();
+  publish_refresh_rate();
   try {
     g_pacing_mode = gt4::pacing::parse_mode(std::getenv("GT4_PACING"));
     // The display switches are read here as on Windows (window.cpp open_window), so an invalid value stops the start.

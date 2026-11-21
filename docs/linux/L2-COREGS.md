@@ -114,9 +114,28 @@ native Vulkan backend (CoreGS 1.1).
   CoreGS's stream sink and `hw_gs_prepare.cpp`, and requires `GT4_LINUX_HW_GS=ON` and the matching port.
 - `native/linux/sdl_window.cpp`: the log names the renderer in use.
 
+## The performance HUD on Linux (2026-11-21)
+
+`GT4_HW_HUD=1` (the launcher's Performance HUD setting) works on Linux. `hud/hw_hud_system_linux.cpp` gives the HUD what
+`hud/hw_hud_system.cpp` asks Windows for:
+
+| Reading | Windows | Linux |
+|---|---|---|
+| Font | Consolas through GDI | the system's monospaced font (fontconfig `monospace`, here Source Code Pro) through FreeType, cut into the same atlas by the same rule |
+| CPU | process times over all threads | `CLOCK_PROCESS_CPUTIME_ID` over all hardware threads |
+| Memory | working set | resident set (`/proc/self/statm`) |
+| GPU and video memory | PDH `GPU Engine` and `GPU Process Memory` of the game's process | the kernel's DRM client statistics of the game's GPU files (`/proc/self/fdinfo`: `drm-engine-*` ns, `drm-memory-vram`), once per DRM client |
+| Refresh rate | the window's monitor | SDL3's current display mode, published by the window host (`native/display_refresh.hpp`) |
+
+Results: `hw_hud` (the fixture's font checks, labelled for Windows) passes; in the game the sampler took 40 readings at
+0.24 ms of processor each and the panel drew 1,200 presentations at 21.3 us each, with every VBlank interval in
+16-17 ms; the game's own DRM statistics were present (amdgpu: `drm-engine-gfx`, `drm-memory-vram` 415,548 KiB). The
+picture of the HUD has not been seen by a person yet (Unknown). A driver without DRM client statistics shows `--` for
+the GPU lines.
+
 ### Not yet on Linux
 
-- The performance HUD (`GT4_HW_HUD`), the CPU sampler and the GS process (GSdx, `GT4_RENDERER=pcsx2`).
+- The CPU sampler and the GS process (GSdx, `GT4_RENDERER=pcsx2`).
 - Save states with `GT4_RENDERER=hw` (refused by the GS stream hook, as on Windows).
 - The launcher's other per-game settings that the Windows `game_main.cpp` applies: `GT4_FORCE_480P`,
   `GT4_FORCE_WIDESCREEN`, `GT4_DISPLAY_ASPECT`, frame skip, the game patches (next step).
