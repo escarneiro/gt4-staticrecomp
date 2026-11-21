@@ -129,8 +129,8 @@ native Vulkan backend (CoreGS 1.1).
 
 Results: `hw_hud` (the fixture's font checks, labelled for Windows) passes; in the game the sampler took 40 readings at
 0.24 ms of processor each and the panel drew 1,200 presentations at 21.3 us each, with every VBlank interval in
-16-17 ms; the game's own DRM statistics were present (amdgpu: `drm-engine-gfx`, `drm-memory-vram` 415,548 KiB). The
-picture of the HUD has not been seen by a person yet (Unknown). A driver without DRM client statistics shows `--` for
+16-17 ms; the game's own DRM statistics were present (amdgpu: `drm-engine-gfx`, `drm-memory-vram` 415,548 KiB).  Tester
+report (2026-11-21): the HUD works, its text and numbers show correctly. A driver without DRM client statistics shows `--` for
 the GPU lines.
 
 ### Not yet on Linux
