@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <unistd.h>  // also provides _exit, the same function as the MSVC CRT's
 
 // Win32 DWORD: an unsigned 32-bit value.
 using DWORD = unsigned int;
@@ -21,6 +22,9 @@ inline int _putenv_s(const char *name, const char *value) {
     return unsetenv(name) == 0 ? 0 : errno;
   return setenv(name, value, 1) == 0 ? 0 : errno;
 }
+
+// MSVC _getpid: the process id.
+inline int _getpid() { return static_cast<int>(getpid()); }
 
 // MSVC tmpfile_s: opens a temporary binary file that is removed when closed. Returns 0 or an errno value.
 inline int tmpfile_s(std::FILE **stream) {

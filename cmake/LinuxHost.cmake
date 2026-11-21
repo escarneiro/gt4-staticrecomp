@@ -238,6 +238,12 @@ set_tests_properties(native_mtvu_measure native_mtvu_ring native_mtvu_journal na
     native_performance_probe native_gs_submit_ring native_flare_limits native_gs_readback_probe
     PROPERTIES RUN_SERIAL TRUE TIMEOUT 120 WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 
+# TASK-074: CoreGS 2.0 (native/hw_gs) libraries, shaders and their tests; off by default (cmake/LinuxCoreGS.cmake).
+option(GT4_LINUX_HW_GS "Build CoreGS 2.0 (native/hw_gs) on Linux" OFF)
+if(GT4_LINUX_HW_GS)
+    include("${CMAKE_SOURCE_DIR}/cmake/LinuxCoreGS.cmake")
+endif()
+
 # Optional TASK-074 L1 targets, all off by default (the host-only build above needs none of them):
 #   GT4_DONOR + GT4_LINUX_PRODUCER  -> gt4_headless_smoke: the donor runtime with its CPU rasterizer, the donor's
 #                                      headless host and a recorded Linux game library.

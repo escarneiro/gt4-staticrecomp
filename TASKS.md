@@ -1610,6 +1610,12 @@ frames, same cycles). Intro movie in a window: 21 late frames and 18 underruns b
 to a build copy after the pin check; the lasting fix needs new overlay pins (owner decision). Not measured yet: the owner's
 demanding scene. Details: [docs/linux/L2-PERFORMANCE.md](docs/linux/L2-PERFORMANCE.md).
 
+Progress (2026-11-21, same branch, CoreGS 2.0 part 1): CoreGS (`native/hw_gs`) builds on Linux (`cmake/LinuxCoreGS.cmake`,
+`-DGT4_LINUX_HW_GS=ON`; Windows API spots behind `#ifdef`, HUD and CPU sampler off on Linux) and passes 257 of 258 tests on
+RADV (1 skipped). A Mesa RADV bug (push-constant array indexed per invocation) broke `hw_tone_hle_exact`; `hw_tone_strips.comp`
+now reads the array through constant indices. Not yet connected to the game. Clean room kept (no PCSX2 material read).
+Details: [docs/linux/L2-COREGS.md](docs/linux/L2-COREGS.md).
+
 ### TASK-018 — Racing wheels
 
 Study (2026-11-04): Luan Antony's wheel, DFP and force feedback roadmap (`docs/studies/WHEEL-FFB-ROADMAP.md`, PR #151, issue
