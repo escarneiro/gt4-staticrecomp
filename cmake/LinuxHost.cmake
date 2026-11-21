@@ -223,3 +223,51 @@ set_tests_properties(native_mtvu_measure native_mtvu_ring native_mtvu_journal na
     native_quickfix native_race_display native_race_widescreen native_shape_observer native_performance_accounting
     native_performance_probe native_gs_submit_ring native_flare_limits native_gs_readback_probe
     PROPERTIES RUN_SERIAL TRUE TIMEOUT 120 WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
+# Optional headless smoke runner (TASK-074 L1): the donor runtime (the same source list as RUNTIME_SOURCES in
+# native/CMakeLists.txt, without the Vulkan GS backend, so frames come from the donor's CPU rasterizer) and the donor's
+# headless host/main.cpp, linked with a Linux candidate game library from scripts/ee_producer.py. VU1 microcode runs
+# in the donor interpreter (the weak register_generated_vu). No window, audio or input: this proves the game code
+# boots and draws on Linux, nothing more. Both paths stay empty by default; the host-only build above needs neither.
+set(GT4_DONOR "" CACHE PATH "Verified ps2-web-recomp checkout (private/references/ps2-web-recomp)")
+set(GT4_LINUX_PRODUCER "" CACHE PATH "Linux candidate EE producer directory holding linux-library.json")
+if(GT4_DONOR OR GT4_LINUX_PRODUCER)
+    if(NOT GT4_DONOR OR NOT GT4_LINUX_PRODUCER)
+        message(FATAL_ERROR "The headless smoke runner needs both GT4_DONOR and GT4_LINUX_PRODUCER")
+    endif()
+    if(NOT EXISTS "${GT4_DONOR}/runtime/include/ps2/system.hpp" OR NOT EXISTS "${GT4_DONOR}/host/main.cpp")
+        message(FATAL_ERROR "GT4_DONOR is not a ps2-web-recomp checkout; run scripts/ee_producer.py prepare first")
+    endif()
+    # The library must be the one ee_producer.py record-library verified and recorded, byte for byte.
+    set(gt4_linux_library "${GT4_LINUX_PRODUCER}/game-build/libps2game.a")
+    if(NOT EXISTS "${GT4_LINUX_PRODUCER}/linux-library.json" OR NOT EXISTS "${gt4_linux_library}")
+        message(FATAL_ERROR "GT4_LINUX_PRODUCER has no recorded Linux library; run ee_producer.py record-library")
+    endif()
+    file(READ "${GT4_LINUX_PRODUCER}/linux-library.json" gt4_linux_receipt)
+    string(JSON gt4_linux_expected GET "${gt4_linux_receipt}" library sha256)
+    file(SHA256 "${gt4_linux_library}" gt4_linux_actual)
+    if(NOT gt4_linux_actual STREQUAL gt4_linux_expected)
+        message(FATAL_ERROR "libps2game.a differs from its linux-library.json record")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GT4_LINUX_PRODUCER}/linux-library.json"
+        "${gt4_linux_library}")
+
+    set(gt4_headless_runtime)
+    foreach(source IN ITEMS memory dispatch system kernel hw cop disc dmac vif vu_micro vu_jit vu_jit_web
+                            ipu/ipu gs/gif gs/queue gs/raster iop/cpu iop/kernel iop/libs iop/hw iop/spu2 iop/sio2
+                            iop/io iop/cdvd iop/sif iop/cdvdfsv)
+        list(APPEND gt4_headless_runtime "${GT4_DONOR}/runtime/src/${source}.cpp")
+    endforeach()
+    # gs/gs.cpp holds the GS model; the Vulkan backend (gs/gpu/gpu.cpp, PS2_GPU) is not part of the smoke runner.
+    list(APPEND gt4_headless_runtime "${GT4_DONOR}/runtime/src/gs/gs.cpp")
+    add_library(gt4_ps2runtime_headless STATIC ${gt4_headless_runtime})
+    target_include_directories(gt4_ps2runtime_headless PUBLIC "${GT4_DONOR}/runtime/include"
+        PRIVATE "${GT4_DONOR}/runtime/src" "${GT4_DONOR}/runtime/src/gs")
+    find_package(Threads REQUIRED)
+    target_link_libraries(gt4_ps2runtime_headless PUBLIC Threads::Threads)
+
+    add_executable(gt4_headless_smoke "${GT4_DONOR}/host/main.cpp")
+    # The game library and the runtime call each other (dispatch tables and runtime services): link them as a group.
+    target_link_libraries(gt4_headless_smoke PRIVATE
+        "$<LINK_GROUP:RESCAN,${gt4_linux_library},gt4_ps2runtime_headless>")
+endif()

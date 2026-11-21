@@ -2,7 +2,8 @@
 
 Status: **built and tested on Linux** (2026-11-20). This is the first part of step L1 in [the Linux plan](PLAN.md): CMake
 accepts Linux, and the platform-neutral host code builds and passes its CTest fixtures with Clang or GCC. The game
-executable is **not** built on Linux yet.
+executable is **not** built on Linux yet; the game library and a headless smoke runner are covered in
+[L1-GAME-LIBRARY.md](L1-GAME-LIBRARY.md).
 
 ## What it builds
 
@@ -54,7 +55,7 @@ Windows), but CTest and the Python suite still have to be run on Windows before 
 
 | Piece | Why | Plan step |
 |---|---|---|
-| `gt4vulkan`, `vulkan_fixture`, `vulkan_async_stress`, `ps2runtime_vulkan` | need the private donor runtime, port and EE game library | L1 (game library on Linux) |
+| `gt4vulkan`, `vulkan_fixture`, `vulkan_async_stress`, `ps2runtime_vulkan` | need the Vulkan port, SPIR-V shaders and a Linux surface (the game library itself now builds: [L1 game library](L1-GAME-LIBRARY.md)) | L1 Vulkan path, L2 |
 | `tools/vu_recomp` | needs the private donor headers | L1 |
 | `native_host_io`, `host_io_fixture`, `wheel_fixture`, `window_heartbeat_fixture`, `key_forward_fixture` | Win32 window, WinMM audio, XInput | L2 (SDL3) |
 | `gt4_achievements` and its fixtures | WinHTTP, GDI+ | L2 |

@@ -148,7 +148,7 @@ See [GS renderer options](docs/GS-RENDERER-OPTIONS.md) and [GSDX-PLAN](docs/GSDX
 | TASK‑136 | Simple onboarding: a new install uses CoreGS 2.0 when the PC runs it, GSdx becomes optional and is downloaded only when the card needs it | 🧪 Built, waits for the owner's test (branch `task/136-simple-onboarding`, 2026-11-02) |
 | TASK‑137 | The launcher links the disc image and no longer copies it; an image that moved asks to be chosen again; installs with a copy keep working | 🧪 Built, waits for the owner's test (branch `task/137-link-disc-image`, candidate 381, 2026-11-02) |
 | TASK‑138 | A portable folder carries its disc image (relative link); accented paths on CoreGS 2.0; the GSdx fallback goes to CoreGS 2.0; a release can be started directly | 🧪 Built, waits for the owner's test (branch `task/138-relative-image-link`, candidate 382, 2026-11-02); GSdx in an accented folder not confirmed |
-| TASK‑074 | Native Linux x86-64 build (SDL3 platform layer, Linux gt4-gs owning the window, Linux packaging) | 🔧 L1 started (2026-11-20, branch `task/074-linux-host-build`): Linux host-only CMake build, 36/36 CTest with clang and GCC; game build not yet ([plan](docs/linux/PLAN.md), [host build](docs/linux/HOST-BUILD.md)) |
+| TASK‑074 | Native Linux x86-64 build (SDL3 platform layer, Linux gt4-gs owning the window, Linux packaging) | 🔧 L1 in progress (2026-11-20, branch `task/074-linux-host-build`): host-only CMake build 36/36 CTest (clang, GCC); EE sources regenerated on Linux byte-identical to the frozen inventory, Linux candidate `libps2game.a`, headless boot to the name entry; Vulkan path open ([plan](docs/linux/PLAN.md), [host build](docs/linux/HOST-BUILD.md), [game library](docs/linux/L1-GAME-LIBRARY.md)) |
 | 🧩 | **gt4-gs 1.0.0, the first stable renderer release** (with TASK‑060/061/062; settings allow-list enforced) | ✅ Published 2026-10-16 (`gt4gs-v1.0.0`, zip sha256 `2e878019...`) |
 | 🚀 | **First stable release (1.0.0) on GitHub** (after TASK‑044, TASK‑043 and the owner's end-to-end test) | 📋 Planned |
 
@@ -1565,6 +1565,15 @@ GCC 16.2.1 36/36 (v2.00), clang 36/36 (Spec II). Source changes sit behind `#ifn
 `perf_clock.cpp`, `perf_probe.cpp`); the linked-image fixture checks POSIX paths on Linux. Still to do: a Windows
 CTest/Python run of these changes before a merge; the game library and runtime on Linux (rest of L1). Details:
 [docs/linux/HOST-BUILD.md](docs/linux/HOST-BUILD.md).
+
+Progress (2026-11-20, same branch, L1 second part): `ee_producer.py` and `tools/ee_producer` run on Linux with a separate
+Linux candidate recipe (the Windows recipe and pins are unchanged). From the verified CORE.GT4 the rebuilt ELF matches its
+pin, and the Linux translator's 328 generated files are byte-identical to the frozen Windows inventory (`7a1a0909...`).
+`libps2game.a` (327 objects, inventory `d5d86cc2...`, the same on two independent builds) is recorded in
+`linux-library.json`, never as production. The optional `gt4_headless_smoke` runner (donor runtime, CPU rasterizer,
+headless host) boots the game: 12,000 frames with scripted input through the memory card dialogs to the name entry, with
+no halt. Not exercised yet: the movie, 3D and races, audio, card writes, VU1 AOT, the Vulkan path. Python: new
+controls in `test_ee_archive.py` and `test_ee_producer.py`. Details: [docs/linux/L1-GAME-LIBRARY.md](docs/linux/L1-GAME-LIBRARY.md).
 
 ### TASK-018 — Racing wheels
 
