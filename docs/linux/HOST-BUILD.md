@@ -55,12 +55,12 @@ Windows), but CTest and the Python suite still have to be run on Windows before 
 
 | Piece | Why | Plan step |
 |---|---|---|
-| `gt4vulkan`, `vulkan_fixture`, `vulkan_async_stress`, `ps2runtime_vulkan` | need the Vulkan port, SPIR-V shaders and a Linux surface (the game library itself now builds: [L1 game library](L1-GAME-LIBRARY.md)) | L1 Vulkan path, L2 |
+| `gt4vulkan` | needs a window, input and audio on Linux; the Vulkan GS backend, `vulkan_fixture` and a headless Vulkan runner now build ([L1 Vulkan](L1-VULKAN.md)) | L2 |
 | `tools/vu_recomp` | needs the private donor headers | L1 |
 | `native_host_io`, `host_io_fixture`, `wheel_fixture`, `window_heartbeat_fixture`, `key_forward_fixture` | Win32 window, WinMM audio, XInput | L2 (SDL3) |
 | `gt4_achievements` and its fixtures | WinHTTP, GDI+ | L2 |
 | `gt4_gs_stream` IPC, `gs_stream_client`, `gs_stream_record`, `gs_live_check` | Win32 file mapping and events | L3 |
-| `gt4_install_paths`, `shape_capture_export`/`control` fixtures | Win32 file and module APIs | L4 |
+| `shape_capture_export`/`control` fixtures | Win32 file APIs (`gt4_install_paths` now builds on Linux) | L4 |
 | `native/hw_gs` (CoreGS 2.0) | Win32 Vulkan loader and timers; TASK-027 clean-room area | L2, by a TASK-027 agent |
 | The Python suite (`tests/python`) | expects `private/tooling-venv/Scripts/python.exe` and Windows binaries | L4 |
 

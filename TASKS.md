@@ -148,7 +148,7 @@ See [GS renderer options](docs/GS-RENDERER-OPTIONS.md) and [GSDX-PLAN](docs/GSDX
 | TASK‑136 | Simple onboarding: a new install uses CoreGS 2.0 when the PC runs it, GSdx becomes optional and is downloaded only when the card needs it | 🧪 Built, waits for the owner's test (branch `task/136-simple-onboarding`, 2026-11-02) |
 | TASK‑137 | The launcher links the disc image and no longer copies it; an image that moved asks to be chosen again; installs with a copy keep working | 🧪 Built, waits for the owner's test (branch `task/137-link-disc-image`, candidate 381, 2026-11-02) |
 | TASK‑138 | A portable folder carries its disc image (relative link); accented paths on CoreGS 2.0; the GSdx fallback goes to CoreGS 2.0; a release can be started directly | 🧪 Built, waits for the owner's test (branch `task/138-relative-image-link`, candidate 382, 2026-11-02); GSdx in an accented folder not confirmed |
-| TASK‑074 | Native Linux x86-64 build (SDL3 platform layer, Linux gt4-gs owning the window, Linux packaging) | 🔧 L1 in progress (2026-11-20, branch `task/074-linux-host-build`): host-only CMake build 36/36 CTest (clang, GCC); EE sources regenerated on Linux byte-identical to the frozen inventory, Linux candidate `libps2game.a`, headless boot to the name entry; Vulkan path open ([plan](docs/linux/PLAN.md), [host build](docs/linux/HOST-BUILD.md), [game library](docs/linux/L1-GAME-LIBRARY.md)) |
+| TASK‑074 | Native Linux x86-64 build (SDL3 platform layer, Linux gt4-gs owning the window, Linux packaging) | 🔧 L1 in progress (2026-11-20, branch `task/074-linux-host-build`): host-only CMake build 36/36 CTest (clang, GCC); EE sources regenerated on Linux byte-identical to the frozen inventory, Linux candidate `libps2game.a`, headless boot to the name entry; native Vulkan GS backend headless on RADV and lavapipe, CTest 39/39; window, input and audio are L2 ([plan](docs/linux/PLAN.md), [host build](docs/linux/HOST-BUILD.md), [game library](docs/linux/L1-GAME-LIBRARY.md)) |
 | 🧩 | **gt4-gs 1.0.0, the first stable renderer release** (with TASK‑060/061/062; settings allow-list enforced) | ✅ Published 2026-10-16 (`gt4gs-v1.0.0`, zip sha256 `2e878019...`) |
 | 🚀 | **First stable release (1.0.0) on GitHub** (after TASK‑044, TASK‑043 and the owner's end-to-end test) | 📋 Planned |
 
@@ -1574,6 +1574,15 @@ pin, and the Linux translator's 328 generated files are byte-identical to the fr
 headless host) boots the game: 12,000 frames with scripted input through the memory card dialogs to the name entry, with
 no halt. Not exercised yet: the movie, 3D and races, audio, card writes, VU1 AOT, the Vulkan path. Python: new
 controls in `test_ee_archive.py` and `test_ee_producer.py`. Details: [docs/linux/L1-GAME-LIBRARY.md](docs/linux/L1-GAME-LIBRARY.md).
+
+Progress (2026-11-20, same branch, L1 third part): the 9 SPIR-V shaders built on Linux by `tools/wgsl_spirv` (naga
+30.0.0) are byte-identical to the slice114 pins. `native_vulkan.cpp` runs headless on Linux (`dlopen` loader, no surface
+extensions, presentation entry points required on Windows only); `vulkan_fixture` passes on the RX 6600 (RADV) and on
+lavapipe (full 4 MiB VRAM identical to the CPU rasterizer; presentation skipped), so Linux CTest is 39/39. The game
+through the Vulkan GS backend: lavapipe frames byte-identical to the CPU rasterizer; RADV differs by at most 3 per
+channel in alpha-blended pixels only (deterministic, not a race; Windows AMD behaviour Unknown). A GCC-built game
+library boots with identical cycles and frames. Not checked yet: the Windows build of these changes. Details:
+[docs/linux/L1-VULKAN.md](docs/linux/L1-VULKAN.md).
 
 ### TASK-018 — Racing wheels
 

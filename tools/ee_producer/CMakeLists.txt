@@ -20,6 +20,9 @@ else()
         message(FATAL_ERROR "The Linux EE producer needs Clang or GCC (found ${CMAKE_CXX_COMPILER_ID})")
     endif()
     set(GT4_PRODUCER_WARNINGS -Wall -Wextra)
+    # Position-independent-executable code (-fPIE), so the library links into the default PIE executables of clang
+    # and GCC alike. clang already defaults to -fPIE (its objects are unchanged); GCC here does not.
+    add_compile_options(-fPIE)
 endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

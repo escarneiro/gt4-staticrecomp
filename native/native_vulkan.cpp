@@ -14,6 +14,10 @@
 #include <string>
 #include <vector>
 
+#ifndef _WIN32
+#include <dlfcn.h>
+#endif
+
 #include "install_paths.hpp"
 #include "pacing.hpp"
 #include "vulkan_extensions.hpp"
@@ -80,7 +84,13 @@ namespace {
 // Only the Vulkan entry points used by this backend are resolved from the
 // loader.
 // clang-format off
-#define VULKAN_FUNCTIONS(X) \
+// The Win32 surface entry point exists only on Windows; Linux is headless until TASK-074 L2.
+#ifdef _WIN32
+#define VULKAN_PLATFORM_FUNCTIONS(X) X(vkCreateWin32SurfaceKHR)
+#else
+#define VULKAN_PLATFORM_FUNCTIONS(X)
+#endif
+#define VULKAN_CORE_FUNCTIONS(X) \
   X(vkCreateInstance) \
   X(vkEnumeratePhysicalDevices) \
   X(vkGetPhysicalDeviceProperties) \
@@ -113,13 +123,7 @@ namespace {
   X(vkCmdBindPipeline) \
   X(vkCmdBindDescriptorSets) \
   X(vkCmdDispatch) \
-  X(vkCreateWin32SurfaceKHR) \
-  X(vkGetPhysicalDeviceSurfaceSupportKHR) \
-  X(vkGetPhysicalDeviceSurfaceFormatsKHR) \
-  X(vkGetPhysicalDeviceSurfacePresentModesKHR) \
-  X(vkCreateSwapchainKHR) \
-  X(vkGetSwapchainImagesKHR) \
-  X(vkQueuePresentKHR) \
+  VULKAN_PLATFORM_FUNCTIONS(X) \
   X(vkCreateImage) \
   X(vkBindImageMemory) \
   X(vkCmdCopyBufferToImage) \
@@ -133,11 +137,9 @@ namespace {
   X(vkDestroyPipelineLayout) \
   X(vkDestroyDescriptorSetLayout) \
   X(vkDestroyCommandPool) \
-  X(vkDestroySurfaceKHR) \
   X(vkDestroyDevice) \
   X(vkDestroyInstance) \
   X(vkUnmapMemory) \
-  X(vkDestroySwapchainKHR) \
   X(vkGetPhysicalDeviceFeatures) \
   X(vkGetDeviceQueue) \
   X(vkAllocateDescriptorSets) \
@@ -146,13 +148,27 @@ namespace {
   X(vkWaitForFences) \
   X(vkCmdPipelineBarrier) \
   X(vkCreateSemaphore) \
-  X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) \
   X(vkGetPhysicalDeviceFormatProperties) \
   X(vkDestroyImage) \
   X(vkGetImageMemoryRequirements) \
-  X(vkAcquireNextImageKHR) \
   X(vkWaitSemaphores) \
   X(vkGetSemaphoreCounterValue)
+// Presentation entry points (surface and swapchain). Windows always loads and requires them; headless Linux
+// (TASK-074 L1) enables no surface extension, so they stay null there until L2 adds the SDL3 surface.
+#define VULKAN_PRESENT_FUNCTIONS(X) \
+  X(vkGetPhysicalDeviceSurfaceSupportKHR) \
+  X(vkGetPhysicalDeviceSurfaceFormatsKHR) \
+  X(vkGetPhysicalDeviceSurfacePresentModesKHR) \
+  X(vkCreateSwapchainKHR) \
+  X(vkGetSwapchainImagesKHR) \
+  X(vkQueuePresentKHR) \
+  X(vkDestroySurfaceKHR) \
+  X(vkDestroySwapchainKHR) \
+  X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) \
+  X(vkAcquireNextImageKHR)
+#define VULKAN_FUNCTIONS(X) \
+  VULKAN_CORE_FUNCTIONS(X) \
+  VULKAN_PRESENT_FUNCTIONS(X)
 // clang-format on
 
 #define DECLARE_FUNCTION(name) PFN_##name name = nullptr;
@@ -228,7 +244,11 @@ Context::~Context() {
   if (instance_ && vkDestroyInstance)
     vkDestroyInstance(instance_, nullptr);
   if (loader_)
+#ifdef _WIN32
     FreeLibrary(loader_);
+#else
+    dlclose(loader_);
+#endif
 }
 
 void Context::initialize(const std::filesystem::path &build_time_shaders) {
@@ -254,12 +274,22 @@ void Context::initialize(const std::filesystem::path &build_time_shaders) {
     else if (std::strcmp(sync, "0") != 0)
       throw std::runtime_error("GT4_GS_SYNC must be 0 or 1");
   }
+#ifdef _WIN32
   loader_ =
       LoadLibraryExW(L"vulkan-1.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
   if (!loader_)
     throw std::runtime_error("Vulkan loader unavailable in System32");
   const auto get_instance = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
       GetProcAddress(loader_, "vkGetInstanceProcAddr"));
+#else
+  // TASK-074 L1: the system Vulkan loader (libvulkan.so.1); the driver is the loader's choice (VK_DRIVER_FILES
+  // selects one, for example lavapipe for a software run).
+  loader_ = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
+  if (!loader_)
+    throw std::runtime_error("Vulkan loader libvulkan.so.1 unavailable");
+  const auto get_instance = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
+      dlsym(loader_, "vkGetInstanceProcAddr"));
+#endif
   if (!get_instance)
     throw std::runtime_error("Vulkan loader lacks vkGetInstanceProcAddr");
   vkCreateInstance = reinterpret_cast<PFN_vkCreateInstance>(
@@ -293,8 +323,14 @@ void Context::initialize(const std::filesystem::path &build_time_shaders) {
     for (std::uint32_t index = 0; index < extension_count; ++index)
       available_instance.emplace_back(listed[index].extensionName);
   }
+#ifdef _WIN32
   const InstanceChoice instance_choice =
       select_instance_extensions(available_instance, force_baseline_);
+#else
+  // TASK-074 L1: headless, so no surface extension and no swapchain maintenance family; L2 selects the SDL3 surface
+  // extensions here.
+  const InstanceChoice instance_choice{};
+#endif
   maintenance_family_ = instance_choice.family;
   std::vector<const char *> extensions;
   for (const auto &name : instance_choice.extensions)
@@ -452,7 +488,11 @@ void Context::initialize(const std::filesystem::path &build_time_shaders) {
 #define REQUIRE_FUNCTION(name)                                                 \
   if (!name)                                                                   \
     throw std::runtime_error("Vulkan entry point unavailable: " #name);
+#ifdef _WIN32
   VULKAN_FUNCTIONS(REQUIRE_FUNCTION)
+#else
+  VULKAN_CORE_FUNCTIONS(REQUIRE_FUNCTION)
+#endif
 #undef REQUIRE_FUNCTION
   vkGetDeviceQueue(device_, queue_family_, 0, &queue_);
   VkCommandPoolCreateInfo pool_info{};
@@ -849,6 +889,11 @@ void Context::wait_idle() {
   check(vkQueueWaitIdle(queue_), "queue idle");
 }
 
+#ifndef _WIN32
+void Context::attach_window(HWND, std::uint32_t, std::uint32_t) {
+  throw std::runtime_error("No window surface on Linux yet (TASK-074 L2); the Linux build is headless");
+}
+#else
 void Context::attach_window(HWND window, std::uint32_t width,
                             std::uint32_t height) {
   if (!window || window_)
@@ -871,6 +916,7 @@ void Context::attach_window(HWND window, std::uint32_t width,
         "Selected GPU queue cannot present to this Win32 surface");
   rebuild_swapchain();
 }
+#endif
 
 void Context::resize(std::uint32_t width, std::uint32_t height) {
   window_width_ = width;

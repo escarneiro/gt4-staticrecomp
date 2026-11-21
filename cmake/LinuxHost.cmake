@@ -224,20 +224,36 @@ set_tests_properties(native_mtvu_measure native_mtvu_ring native_mtvu_journal na
     native_performance_probe native_gs_submit_ring native_flare_limits native_gs_readback_probe
     PROPERTIES RUN_SERIAL TRUE TIMEOUT 120 WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 
-# Optional headless smoke runner (TASK-074 L1): the donor runtime (the same source list as RUNTIME_SOURCES in
-# native/CMakeLists.txt, without the Vulkan GS backend, so frames come from the donor's CPU rasterizer) and the donor's
-# headless host/main.cpp, linked with a Linux candidate game library from scripts/ee_producer.py. VU1 microcode runs
-# in the donor interpreter (the weak register_generated_vu). No window, audio or input: this proves the game code
-# boots and draws on Linux, nothing more. Both paths stay empty by default; the host-only build above needs neither.
+# Optional TASK-074 L1 targets, all off by default (the host-only build above needs none of them):
+#   GT4_DONOR + GT4_LINUX_PRODUCER  -> gt4_headless_smoke: the donor runtime with its CPU rasterizer, the donor's
+#                                      headless host and a recorded Linux game library.
+#   GT4_DONOR + GT4_LINUX_PORT_DIR + GT4_LINUX_SHADER_DIR
+#                                   -> the native Vulkan GS backend (native_vulkan.cpp, headless on Linux) with
+#                                      vulkan_fixture and its CTest entries; with GT4_LINUX_PRODUCER as well,
+#                                      gt4_vulkan_headless_smoke (the game drawn by the Vulkan GS backend).
+# The runtime source list is RUNTIME_SOURCES of native/CMakeLists.txt. VU1 microcode runs in the donor interpreter
+# (the weak register_generated_vu). No window, audio or input: L2 adds those.
 set(GT4_DONOR "" CACHE PATH "Verified ps2-web-recomp checkout (private/references/ps2-web-recomp)")
 set(GT4_LINUX_PRODUCER "" CACHE PATH "Linux candidate EE producer directory holding linux-library.json")
-if(GT4_DONOR OR GT4_LINUX_PRODUCER)
-    if(NOT GT4_DONOR OR NOT GT4_LINUX_PRODUCER)
-        message(FATAL_ERROR "The headless smoke runner needs both GT4_DONOR and GT4_LINUX_PRODUCER")
-    endif()
+set(GT4_LINUX_PORT_DIR "" CACHE PATH "Native Vulkan port derived by scripts/prepare_external_vulkan.py")
+set(GT4_LINUX_SHADER_DIR "" CACHE PATH "SPIR-V shaders built by tools/wgsl_spirv from the donor gs.wgsl")
+if((GT4_LINUX_PRODUCER OR GT4_LINUX_PORT_DIR OR GT4_LINUX_SHADER_DIR) AND NOT GT4_DONOR)
+    message(FATAL_ERROR "The optional Linux runtime targets need GT4_DONOR")
+endif()
+if(GT4_DONOR)
     if(NOT EXISTS "${GT4_DONOR}/runtime/include/ps2/system.hpp" OR NOT EXISTS "${GT4_DONOR}/host/main.cpp")
         message(FATAL_ERROR "GT4_DONOR is not a ps2-web-recomp checkout; run scripts/ee_producer.py prepare first")
     endif()
+    find_package(Threads REQUIRED)
+    set(gt4_donor_runtime)
+    foreach(source IN ITEMS memory dispatch system kernel hw cop disc dmac vif vu_micro vu_jit vu_jit_web
+                            ipu/ipu gs/gif gs/queue gs/raster iop/cpu iop/kernel iop/libs iop/hw iop/spu2 iop/sio2
+                            iop/io iop/cdvd iop/sif iop/cdvdfsv)
+        list(APPEND gt4_donor_runtime "${GT4_DONOR}/runtime/src/${source}.cpp")
+    endforeach()
+endif()
+
+if(GT4_LINUX_PRODUCER)
     # The library must be the one ee_producer.py record-library verified and recorded, byte for byte.
     set(gt4_linux_library "${GT4_LINUX_PRODUCER}/game-build/libps2game.a")
     if(NOT EXISTS "${GT4_LINUX_PRODUCER}/linux-library.json" OR NOT EXISTS "${gt4_linux_library}")
@@ -252,22 +268,84 @@ if(GT4_DONOR OR GT4_LINUX_PRODUCER)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GT4_LINUX_PRODUCER}/linux-library.json"
         "${gt4_linux_library}")
 
-    set(gt4_headless_runtime)
-    foreach(source IN ITEMS memory dispatch system kernel hw cop disc dmac vif vu_micro vu_jit vu_jit_web
-                            ipu/ipu gs/gif gs/queue gs/raster iop/cpu iop/kernel iop/libs iop/hw iop/spu2 iop/sio2
-                            iop/io iop/cdvd iop/sif iop/cdvdfsv)
-        list(APPEND gt4_headless_runtime "${GT4_DONOR}/runtime/src/${source}.cpp")
-    endforeach()
-    # gs/gs.cpp holds the GS model; the Vulkan backend (gs/gpu/gpu.cpp, PS2_GPU) is not part of the smoke runner.
-    list(APPEND gt4_headless_runtime "${GT4_DONOR}/runtime/src/gs/gs.cpp")
-    add_library(gt4_ps2runtime_headless STATIC ${gt4_headless_runtime})
+    # gs/gs.cpp holds the GS model; without PS2_GPU it draws with the donor's CPU rasterizer.
+    add_library(gt4_ps2runtime_headless STATIC ${gt4_donor_runtime} "${GT4_DONOR}/runtime/src/gs/gs.cpp")
     target_include_directories(gt4_ps2runtime_headless PUBLIC "${GT4_DONOR}/runtime/include"
         PRIVATE "${GT4_DONOR}/runtime/src" "${GT4_DONOR}/runtime/src/gs")
-    find_package(Threads REQUIRED)
     target_link_libraries(gt4_ps2runtime_headless PUBLIC Threads::Threads)
 
     add_executable(gt4_headless_smoke "${GT4_DONOR}/host/main.cpp")
     # The game library and the runtime call each other (dispatch tables and runtime services): link them as a group.
     target_link_libraries(gt4_headless_smoke PRIVATE
         "$<LINK_GROUP:RESCAN,${gt4_linux_library},gt4_ps2runtime_headless>")
+endif()
+
+if(GT4_LINUX_PORT_DIR OR GT4_LINUX_SHADER_DIR)
+    if(NOT GT4_LINUX_PORT_DIR OR NOT GT4_LINUX_SHADER_DIR)
+        message(FATAL_ERROR "The Linux Vulkan backend needs both GT4_LINUX_PORT_DIR and GT4_LINUX_SHADER_DIR")
+    endif()
+    foreach(port_file IN ITEMS gpu.cpp gpu.hpp gs.cpp main.cpp)
+        if(NOT EXISTS "${GT4_LINUX_PORT_DIR}/${port_file}")
+            message(FATAL_ERROR "GT4_LINUX_PORT_DIR lacks ${port_file}; run scripts/prepare_external_vulkan.py")
+        endif()
+    endforeach()
+    # The shaders are naga's output for the pinned donor gs.wgsl; they must be byte-identical to the Windows pins.
+    file(READ "${CMAKE_SOURCE_DIR}/docs/inputs/slice114-native-base.json" gt4_shader_manifest)
+    string(JSON gt4_dependency_count LENGTH "${gt4_shader_manifest}" runtime_dependencies)
+    math(EXPR gt4_dependency_last "${gt4_dependency_count} - 1")
+    set(gt4_shader_count 0)
+    foreach(index RANGE ${gt4_dependency_last})
+        string(JSON gt4_dependency_path GET "${gt4_shader_manifest}" runtime_dependencies ${index} path)
+        if(gt4_dependency_path MATCHES "/shaders/([a-z_]+\\.spv)$")
+            set(gt4_shader "${GT4_LINUX_SHADER_DIR}/${CMAKE_MATCH_1}")
+            string(JSON gt4_shader_expected GET "${gt4_shader_manifest}" runtime_dependencies ${index} sha256)
+            if(NOT EXISTS "${gt4_shader}")
+                message(FATAL_ERROR "Missing shader ${gt4_shader}; run tools/wgsl_spirv")
+            endif()
+            file(SHA256 "${gt4_shader}" gt4_shader_actual)
+            if(NOT gt4_shader_actual STREQUAL gt4_shader_expected)
+                message(FATAL_ERROR "${gt4_shader} differs from docs/inputs/slice114-native-base.json")
+            endif()
+            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${gt4_shader}")
+            math(EXPR gt4_shader_count "${gt4_shader_count} + 1")
+        endif()
+    endforeach()
+    if(NOT gt4_shader_count EQUAL 9)
+        message(FATAL_ERROR "Expected 9 pinned shaders, found ${gt4_shader_count}")
+    endif()
+
+    gt4_host_library(gt4_install_paths install_paths.cpp)
+    add_library(gt4_ps2runtime_vulkan STATIC ${gt4_donor_runtime} "${GT4_LINUX_PORT_DIR}/gs.cpp"
+        "${GT4_LINUX_PORT_DIR}/gpu.cpp" "${GT4_NATIVE}/native_vulkan.cpp")
+    target_include_directories(gt4_ps2runtime_vulkan PUBLIC "${GT4_DONOR}/runtime/include" "${GT4_DONOR}/runtime/src"
+        "${GT4_DONOR}/runtime/src/gs" "${GT4_NATIVE}" "${GT4_LINUX_PORT_DIR}")
+    target_compile_definitions(gt4_ps2runtime_vulkan PUBLIC PS2_GPU GT4_VULKAN_SHADER_DIR="${GT4_LINUX_SHADER_DIR}")
+    target_link_libraries(gt4_ps2runtime_vulkan PUBLIC gt4_pacing gt4_quickfix gt4_install_paths gt4_vulkan_extensions
+        gt4_usb gt4_perf_probe Threads::Threads ${CMAKE_DL_LIBS})
+
+    add_executable(vulkan_fixture "${GT4_NATIVE}/fixture.cpp")
+    target_link_libraries(vulkan_fixture PRIVATE gt4_ps2runtime_vulkan)
+    # Same checks as the Windows native_vulkan_pixels entries, minus presentation (headless until L2). The default
+    # entry runs on the loader's choice of GPU; the lavapipe entry forces Mesa's software driver when it is installed.
+    add_test(NAME native_vulkan_pixels COMMAND $<TARGET_FILE:vulkan_fixture>)
+    add_test(NAME native_vulkan_pixels_sync COMMAND $<TARGET_FILE:vulkan_fixture>)
+    set_tests_properties(native_vulkan_pixels_sync PROPERTIES ENVIRONMENT "GT4_GS_SYNC=1")
+    set(gt4_tests_vulkan native_vulkan_pixels native_vulkan_pixels_sync)
+    find_file(GT4_LAVAPIPE_ICD lvp_icd.x86_64.json PATHS /usr/share/vulkan/icd.d /etc/vulkan/icd.d NO_DEFAULT_PATH)
+    if(GT4_LAVAPIPE_ICD)
+        add_test(NAME native_vulkan_pixels_lavapipe COMMAND $<TARGET_FILE:vulkan_fixture>)
+        set_tests_properties(native_vulkan_pixels_lavapipe PROPERTIES ENVIRONMENT "VK_DRIVER_FILES=${GT4_LAVAPIPE_ICD}")
+        list(APPEND gt4_tests_vulkan native_vulkan_pixels_lavapipe)
+    endif()
+    set_tests_properties(${gt4_tests_vulkan} PROPERTIES RUN_SERIAL TRUE TIMEOUT 300
+        PASS_REGULAR_EXPRESSION "PASS: real Vulkan" WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
+    if(GT4_LINUX_PRODUCER)
+        # The port's main.cpp is the donor host with PS2_GS=gpu forced (no silent CPU raster fallback); its
+        # _putenv_s call comes from native/host_compat.hpp.
+        add_executable(gt4_vulkan_headless_smoke "${GT4_LINUX_PORT_DIR}/main.cpp")
+        target_compile_options(gt4_vulkan_headless_smoke PRIVATE -include "${GT4_NATIVE}/host_compat.hpp")
+        target_link_libraries(gt4_vulkan_headless_smoke PRIVATE
+            "$<LINK_GROUP:RESCAN,${gt4_linux_library},gt4_ps2runtime_vulkan>")
+    endif()
 endif()

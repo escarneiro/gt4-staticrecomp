@@ -89,8 +89,5 @@ whether such images should be accepted is an owner decision for step L4, not par
 
 ## Still open in L1
 
-- The Vulkan path on Linux: the native port (`scripts/prepare_external_vulkan.py`), SPIR-V shaders from
-  `tools/wgsl_spirv` (needs Rust and Naga) and a lavapipe run of `vulkan_fixture`. `native_vulkan.cpp` creates a Win32
-  surface today, so this overlaps step L2.
-- A GCC build of the game library (the host build is already checked with GCC).
+- The Vulkan path is done headless: see [L1-VULKAN.md](L1-VULKAN.md).
 - The VU1 and VU0 AOT capsules (`prepare_perf_runtime.py`) on Linux, so the smoke matches the production profile.

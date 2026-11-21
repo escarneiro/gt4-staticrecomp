@@ -1,10 +1,19 @@
 #pragma once
 
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 #define VK_NO_PROTOTYPES
 #define VK_USE_PLATFORM_WIN32_KHR
+#else
+// TASK-074 L1: headless Linux, with no window system yet (L2 adds the SDL3 surface). These two names keep the shared
+// adapter sources (native/gpu_tail.inc, spliced into the derived port) compiling unchanged; attach_window refuses on
+// Linux. HWND has the same opaque-pointer form as the Win32 STRICT definition; HMODULE holds the dlopen handle.
+using HWND = struct HWND__ *;
+using HMODULE = void *;
+#define VK_NO_PROTOTYPES
+#endif
 #include <vulkan/vulkan.h>
 
 #include "gs_submit_ring.hpp"
