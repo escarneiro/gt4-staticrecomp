@@ -218,6 +218,18 @@ if(SDL3_FOUND)
     target_link_libraries(linux_pacing_fixture PRIVATE gt4_pacing SDL3::SDL3)
     add_test(NAME native_linux_pacing COMMAND $<TARGET_FILE:linux_pacing_fixture>)
     set_tests_properties(native_linux_pacing PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
+    # TASK-018 on Linux: the racing wheel (wheel.toml, SDL3 joystick and haptics) feeding the virtual Driving Force Pro,
+    # and the force effect player. Same sources as native_host_io's wheel part on Windows.
+    find_package(Threads REQUIRED)
+    gt4_host_library(gt4_wheel wheel.cpp dfp_haptics.cpp)
+    target_link_libraries(gt4_wheel PUBLIC gt4_usb gt4_controls gt4_pad_mapping SDL3::SDL3 Threads::Threads)
+    target_compile_options(gt4_wheel PRIVATE -include "${GT4_NATIVE}/host_compat.hpp")
+    gt4_host_fixture(wheel_fixture wheel_fixture.cpp)
+    target_compile_options(wheel_fixture PRIVATE -include "${GT4_NATIVE}/host_compat.hpp")
+    target_link_libraries(wheel_fixture PRIVATE gt4_wheel)
+    add_test(NAME native_wheel COMMAND $<TARGET_FILE:wheel_fixture>)
+    # The fixture pins the wheel to an SDL3 virtual joystick and plays forces on a fake sink: a real wheel is never driven.
+    set_tests_properties(native_wheel PROPERTIES RUN_SERIAL TRUE TIMEOUT 120)
 endif()
 
 # The guest-hook fixtures assert the v2.00 chains (GT4_HOOK_FIXTURE_LIB, as in the Windows tree).
@@ -492,6 +504,33 @@ if(GT4_LINUX_PORT_DIR OR GT4_LINUX_SHADER_DIR)
         message(STATUS "Linux license guard capsule: equals the slice408 pins")
     endif()
 
+    # TASK-018 on Linux (native DFP wheel): the USB capsule of scripts/prepare_usb_runtime.py, as GT4_USB_RUNTIME_SOURCE in
+    # native/CMakeLists.txt. Its iop/hw.cpp sends the OHCI registers to native/usb_ohci.cpp while the virtual Driving Force
+    # Pro is plugged in (wheel.toml enabled = true, or GT4_DFP=1); otherwise the donor's register stub answers as before.
+    # Both files must equal the slice409 pins (the same derived bytes as the Windows game builds).
+    set(GT4_LINUX_USB_RUNTIME "" CACHE PATH "prepare_usb_runtime.py capsule (hw.cpp, runtime.json)")
+    if(GT4_LINUX_USB_RUNTIME)
+        file(READ "${CMAKE_SOURCE_DIR}/docs/inputs/slice409-usb-runtime.json" gt4_usb_manifest)
+        foreach(index RANGE 1)
+            string(JSON gt4_usb_pinned_path GET "${gt4_usb_manifest}" files ${index} path)
+            string(JSON gt4_usb_pinned_sha GET "${gt4_usb_manifest}" files ${index} sha256)
+            get_filename_component(gt4_usb_name "${gt4_usb_pinned_path}" NAME)
+            if(NOT EXISTS "${GT4_LINUX_USB_RUNTIME}/${gt4_usb_name}")
+                message(FATAL_ERROR "GT4_LINUX_USB_RUNTIME has no ${gt4_usb_name}; derive it with prepare_usb_runtime.py")
+            endif()
+            file(SHA256 "${GT4_LINUX_USB_RUNTIME}/${gt4_usb_name}" gt4_usb_actual)
+            if(NOT gt4_usb_actual STREQUAL gt4_usb_pinned_sha)
+                message(FATAL_ERROR "USB capsule ${gt4_usb_name} differs from docs/inputs/slice409-usb-runtime.json")
+            endif()
+            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GT4_LINUX_USB_RUNTIME}/${gt4_usb_name}")
+        endforeach()
+        list(REMOVE_ITEM gt4_donor_runtime "${GT4_DONOR}/runtime/src/iop/hw.cpp")
+        list(APPEND gt4_donor_runtime "${GT4_LINUX_USB_RUNTIME}/hw.cpp")
+        set_source_files_properties("${GT4_LINUX_USB_RUNTIME}/hw.cpp" PROPERTIES
+            INCLUDE_DIRECTORIES "${GT4_DONOR}/runtime/src/iop;${GT4_NATIVE}")
+        message(STATUS "Linux USB capsule: equals the slice409 pins (virtual Driving Force Pro)")
+    endif()
+
     add_library(gt4_ps2runtime_vulkan STATIC ${gt4_donor_runtime} "${GT4_LINUX_PORT_DIR}/gs.cpp"
         "${GT4_LINUX_PORT_DIR}/gpu.cpp" "${GT4_NATIVE}/native_vulkan.cpp")
     # TASK-134 fast headers, on by default as in native/CMakeLists.txt: the donor's runtime headers with exact faster forms
@@ -667,7 +706,7 @@ sys.exit(0 if digest == pin else 1)
             set_source_files_properties("${GT4_LINUX_PORT_DIR}/main.cpp" PROPERTIES
                 COMPILE_OPTIONS "-include;${GT4_NATIVE}/host_compat.hpp")
             target_compile_options(gt4_linux_window PRIVATE ${GT4_WARNINGS})
-            target_link_libraries(gt4_linux_window PRIVATE gt4_controls gt4_pad_mapping SDL3::SDL3
+            target_link_libraries(gt4_linux_window PRIVATE gt4_controls gt4_pad_mapping gt4_wheel SDL3::SDL3
                 "$<LINK_GROUP:RESCAN,${gt4_linux_library},gt4_patch_hooks,gt4_ps2runtime_vulkan>")
         endif()
 

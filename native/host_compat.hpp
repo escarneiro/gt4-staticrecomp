@@ -23,6 +23,22 @@ inline int _putenv_s(const char *name, const char *value) {
   return setenv(name, value, 1) == 0 ? 0 : errno;
 }
 
+// MSVC _dupenv_s: *BUFFER gets a malloc'd copy of NAME's value (the caller frees it), or nullptr when NAME is unset;
+// *LENGTH is the copy's size including the terminator (0 when unset). Returns 0 or an errno value.
+inline int _dupenv_s(char **buffer, std::size_t *length, const char *name) {
+  if (buffer == nullptr || name == nullptr) return EINVAL;
+  *buffer = nullptr;
+  if (length != nullptr) *length = 0;
+  const char *value = std::getenv(name);
+  if (value == nullptr) return 0;
+  const std::size_t size = std::strlen(value) + 1;
+  *buffer = static_cast<char *>(std::malloc(size));
+  if (*buffer == nullptr) return ENOMEM;
+  std::memcpy(*buffer, value, size);
+  if (length != nullptr) *length = size;
+  return 0;
+}
+
 // MSVC _getpid: the process id.
 inline int _getpid() { return static_cast<int>(getpid()); }
 

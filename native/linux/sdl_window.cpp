@@ -10,8 +10,9 @@
 // prints the pacing report. The game patches: GT4_FORCE_480P is held here at every VBlank (the VU1 worker runtime holds
 // it too, as on Windows); the display aspect (GT4_DISPLAY_ASPECT) gets the window size and the race view presentation
 // from here; the rest act from the translated game and the runtime (linux_main.cpp configures them). What it does not
-// have yet (later TASK-074 steps): the frame skip's host side, racing wheels, RetroAchievements, the F7/F8 performance
-// probe sections, input recording and the GS process (gt4-gs).
+// have yet (later TASK-074 steps): the frame skip's host side, RetroAchievements, the F7/F8 performance probe sections,
+// input recording and the GS process (gt4-gs). Racing wheels (TASK-018): a wheel.toml with enabled = true drives the
+// virtual Driving Force Pro (native/wheel.hpp), as on Windows; the USB capsule (GT4_LINUX_USB_RUNTIME) must be built in.
 
 #include "window.hpp"
 
@@ -30,6 +31,7 @@
 #include "pad_mapping.hpp"
 #include "ps2/system.hpp"
 #include "sdl_gamepad.hpp"
+#include "wheel.hpp"
 #include "window_mode.hpp"
 #ifdef GT4_GS_STREAM_CLIENT
 #include "gs_stream/gs_stream_client.hpp"
@@ -65,6 +67,19 @@ SDL_Gamepad *g_pad = nullptr;
 gt4::controls::ControlMap g_controls;
 std::vector<KeyBinding> g_keys;
 std::uint16_t g_rumble = 0;
+
+// Racing wheel (native/wheel.hpp, TASK-018/TASK-181), as in native/window.cpp: the host wheel, pedals and shifter drive the
+// virtual Driving Force Pro on the emulated USB bus, and the game's own forces play on the wheel. Off unless a wheel.toml
+// with enabled = true is found (GT4_WHEEL_FILE, beside GT4_CONTROLS_FILE, or beside the executable).
+gt4::wheel::WheelConfig g_wheel_config;
+std::unique_ptr<gt4::wheel::WheelInput> g_wheel;
+
+bool owned_by_wheel(SDL_JoystickID instance) {
+  if (!g_wheel)
+    return false;
+  const auto &owned = g_wheel->owned_device_ids();
+  return std::find(owned.begin(), owned.end(), instance) != owned.end();
+}
 
 // Pacing, as in native/window.cpp: GT4_PACING, the frame clock and grid, the release diagnostics and the sound output.
 gt4::pacing::Mode g_pacing_mode = gt4::pacing::Mode::paced;
@@ -112,6 +127,9 @@ void open_gamepad() {
     return;
   std::vector<gt4::pad::PadCandidate> candidates;
   for (int index = 0; index < count; ++index) {
+    // A device the wheel owns is never read as a gamepad too (as ControllerInput::set_excluded_devices on Windows).
+    if (owned_by_wheel(ids[index]))
+      continue;
     gt4::pad::PadCandidate candidate;
     candidate.instance = ids[index];
     char guid[33] = {};
@@ -167,6 +185,11 @@ void poll_events() {
                              static_cast<std::uint32_t>(event.window.data2));
       gt4::display_aspect::set_window_client_size(static_cast<std::uint32_t>(event.window.data1),
                                                   static_cast<std::uint32_t>(event.window.data2));
+      break;
+    case SDL_EVENT_WINDOW_FOCUS_LOST:
+      // As WM_KILLFOCUS on Windows: the wheel's input goes neutral and its forces stop.
+      if (g_wheel)
+        g_wheel->stop();
       break;
     case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
     case SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED:
@@ -282,8 +305,17 @@ void on_vblank() {
   if (g_force_480p)
     gt4::display::force_race_480p_at_vblank(ps2::g_ram, ps2::kRamSize, g_force_480p_state);
   // Scripted presses (--press) drive the pad on their own, as in the headless runner.
-  if (ps2::g_options.presses.empty())
+  if (ps2::g_options.presses.empty()) {
+    // The wheel resolves which devices it owns first, so the gamepad path never reads them too.
+    if (g_wheel) {
+      g_wheel->prepare(SDL_GetKeyboardFocus() == g_window);
+      if (g_pad && owned_by_wheel(SDL_GetGamepadID(g_pad))) {
+        close_gamepad();
+        open_gamepad();
+      }
+    }
     apply_pad(read_pad());
+  }
   update_rumble();
   if (g_audio) {
     // Paced mode: rate control and moving ring data to the device, without waiting.
@@ -303,6 +335,7 @@ void on_vblank() {
 // is a global of the port (g_vulkan) whose destructor, at exit, releases the swapchain and surface built on this
 // window, so destroying the window or the X11/Wayland connection first would crash that destructor.
 void close_all() {
+  g_wheel.reset(); // stops the forces and releases the haptic device before its joystick closes
   close_gamepad();
   g_audio.reset();
 }
@@ -326,6 +359,15 @@ bool open_window(bool fullscreen) {
     std::fprintf(stderr, "[window] %s, game not started\n", error.what());
     return false;
   }
+  // A wheel file the parser refuses never stops the game: the error is logged and the game runs without the wheel.
+  const gt4::wheel::WheelFileResult wheel_file = gt4::wheel::load_wheel_from_environment();
+  g_wheel_config = wheel_file.config;
+  if (!wheel_file.error.empty())
+    std::fprintf(stderr, "[wheel] wheel.toml refused, the game runs without the wheel: %s\n", wheel_file.error.c_str());
+  else
+    std::fprintf(stderr, "[wheel] %s (enabled=%s, preset=%s)\n",
+                 wheel_file.path.empty() ? "no wheel.toml" : "wheel.toml found", g_wheel_config.enabled ? "true" : "false",
+                 g_wheel_config.preset.c_str());
   for (const auto &binding : gt4::controls::keyboard_bindings(g_controls))
     g_keys.push_back({gt4::keyboard::scancodes_for_virtual_key(binding.virtual_key), binding.button_mask});
   if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) {
@@ -428,6 +470,8 @@ int run_window(const std::function<int()> &emulate) {
   const bool coregs = renderer != nullptr && std::strcmp(renderer, "hw") == 0;
   std::fprintf(stderr, "[window] guest output through %s (%s, %dx%d)\n",
                coregs ? "CoreGS 2.0 (GT4_RENDERER=hw)" : "the native Vulkan backend (CoreGS 1.1)", driver, width, height);
+  // Before the guest runs: an enabled wheel plugs the virtual DFP in before the IOP's USB driver first looks.
+  g_wheel = std::make_unique<gt4::wheel::WheelInput>(g_wheel_config);
   ps2::g_options.on_vblank = on_vblank;
   if (g_audio)
     ps2::set_audio_sink([](const std::int16_t *samples, std::size_t frames) { g_audio->push(samples, frames); });

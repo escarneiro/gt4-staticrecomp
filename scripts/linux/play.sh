@@ -10,6 +10,8 @@
 #   GT4_LINUX_RENDERER  coregs2 (default) or coregs1 (the native Vulkan backend)
 #   GT4_HW_SCALE        CoreGS 2.0 internal resolution multiplier, 1..12 (default 3)
 #   GT4_LINUX_FXAA      1 (default) or 0
+#   GT4_WHEEL_FILE      a wheel.toml with enabled = true: the racing wheel drives the virtual Driving Force Pro
+#                       (docs/WHEEL-NATIVE-DFP.md; the build needs -DGT4_LINUX_USB_RUNTIME)
 # Any other GT4_* variable already set (GT4_FULLSCREEN=1, GT4_OUTPUT_SIZE=2560x1080, GT4_PRESENT_MODE=mailbox,
 # GT4_TRIGGER_FULL_RANGE=0, GT4_CAMERA_360=0, ...) is passed on unchanged.
 set -euo pipefail

@@ -72,7 +72,8 @@ CMake refuses a capsule whose sources differ from `slice178-main-runtime.json` a
 ## Not yet on Linux
 
 - The rest of the release runtime profile: the frame-cost capsule (frame skip, TASK-082/084), the IPU fast decoder
-  (`slice365-ipu-fast-runtime`), the SPU2, USB, memory-card and license-guard capsules.
+  (`slice365-ipu-fast-runtime`), the SPU2, memory-card and license-guard capsules. The USB capsule and the racing wheel
+  are in (`GT4_LINUX_USB_RUNTIME`, docs/WHEEL-NATIVE-DFP.md "Linux").
 - The EE game library with fast headers and PGO/ThinLTO, as the release builds it; the Linux library is plain `-O3`.
 - CoreGS 2.0 (upscaling and anti-aliasing; the CoreGS 1.1 backend renders at 1x with nearest scaling). The flicker
   went away with the AOT build, which points at late frames rather than the backend (hypothesis).
