@@ -3,43 +3,42 @@
 // events, the pad, the presentation and the pacing. The SDL handling of X11/Wayland handles, audio and the controller
 // follows the MIT donor's host/window.cpp (ps2-web-recomp, SDL2), ported to SDL3.
 //
-// What it has: an X11 or Wayland window presented by the native Vulkan GS backend (16:9, FIFO), the controls table
-// (GT4_CONTROLS_FILE) for the keyboard and the first SDL3 gamepad (GT4_PAD selects one), rumble, 48 kHz stereo audio
-// that paces the game, F11 and Alt+Enter fullscreen. What it does not have yet (later TASK-074 steps): the Windows
-// host's frame clock and audio rate control, the game patches (widescreen hooks, 360 camera, FoV), racing wheels,
-// RetroAchievements, the F7/F8 performance probe, input recording and the GS process (gt4-gs).
+// What it has: an X11 or Wayland window presented by the native Vulkan GS backend (16:9, GT4_PRESENT_MODE), the
+// controls table (GT4_CONTROLS_FILE) for the keyboard and the first SDL3 gamepad (GT4_PAD selects one), rumble, F11
+// and Alt+Enter fullscreen, and the Windows host's pacing (GT4_PACING): by default the frame clock releases every
+// VBlank on a 60 Hz grid and the sound is resampled to keep its queue at the latency target (sdl_audio.hpp); F8
+// prints the pacing report. What it does not have yet (later TASK-074 steps): the game patches (widescreen hooks,
+// 360 camera, FoV), racing wheels, RetroAchievements, the F7/F8 performance probe sections, input recording and the
+// GS process (gt4-gs).
 
 #include "window.hpp"
 
 #include "controls.hpp"
+#include "frame_clock.hpp"
 #include "gpu.hpp"
 #include "gs/gs.hpp"
 #include "keyboard_scancodes.hpp"
+#include "linux/sdl_audio.hpp"
+#include "pacing.hpp"
 #include "pad_mapping.hpp"
 #include "ps2/system.hpp"
 #include "sdl_gamepad.hpp"
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace {
 
-// The guest's audio: 48 kHz, 16-bit, stereo (ps2::set_audio_sink).
-constexpr int kAudioRate = 48000;
-constexpr int kAudioChannels = 2;
-constexpr int kAudioBytesPerMs = kAudioRate / 1000 * kAudioChannels * 2;
-// The audio device clock paces the game: past this much queued sound the VBlank waits (the donor's value).
-constexpr int kPaceAheadMs = 80;
-// Sound beyond this much is dropped instead of queued, so a stall cannot build a long delay.
-constexpr int kDropAboveMs = 500;
 // SurfaceTarget kinds of the derived gpu.hpp (enum Kind { X11, Wayland, Canvas, Win32 }).
 constexpr int kSurfaceX11 = 0;
 constexpr int kSurfaceWayland = 1;
@@ -50,12 +49,20 @@ struct KeyBinding {
 };
 
 SDL_Window *g_window = nullptr;
-SDL_AudioStream *g_audio = nullptr;
 SDL_Gamepad *g_pad = nullptr;
 gt4::controls::ControlMap g_controls;
 std::vector<KeyBinding> g_keys;
 std::uint16_t g_rumble = 0;
-std::uint64_t g_next_vblank_ns = 0;
+
+// Pacing, as in native/window.cpp: GT4_PACING, the frame clock and grid, the release diagnostics and the sound output.
+gt4::pacing::Mode g_pacing_mode = gt4::pacing::Mode::paced;
+std::unique_ptr<FrameClock> g_clock;
+std::unique_ptr<gt4::pacing::FramePacer> g_pacer;
+std::unique_ptr<gt4::linux_host::SdlAudioOutput> g_audio;
+gt4::pacing::Diagnostics g_diagnostics;
+gt4::pacing::Counters g_counters_at_report;
+std::int64_t g_last_release = 0;
+bool g_report_requested = false;
 
 void close_gamepad() {
   if (g_pad) {
@@ -115,6 +122,8 @@ void poll_events() {
           (event.key.scancode == SDL_SCANCODE_F11 ||
            (event.key.scancode == SDL_SCANCODE_RETURN && (event.key.mod & SDL_KMOD_ALT))))
         toggle_fullscreen();
+      if (!event.key.repeat && event.key.scancode == SDL_SCANCODE_F8)
+        g_report_requested = true;
       break;
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
       ps2::gs::resize_window(static_cast<std::uint32_t>(event.window.data1),
@@ -179,41 +188,70 @@ void update_rumble() {
   SDL_RumbleGamepad(g_pad, motors.low_frequency, motors.high_frequency, value ? 60000 : 0);
 }
 
-int queued_audio_ms() {
-  return g_audio ? SDL_GetAudioStreamQueued(g_audio) / kAudioBytesPerMs : 0;
+gt4::pacing::Counters pacing_counters() {
+  gt4::pacing::Counters counters;
+  if (g_pacer)
+    counters.late_frames = g_pacer->late_frames();
+  if (g_audio) {
+    counters.audio_underruns = g_audio->underruns();
+    counters.ring_overflow_frames = g_audio->overflow_frames();
+  }
+  return counters;
 }
 
-void pace() {
-  if (g_audio) {
-    while (queued_audio_ms() > kPaceAheadMs)
-      SDL_Delay(1);
-    return;
+// The pacing report of the Windows F8 (pacing.hpp Diagnostics) for the frames since the last one.
+void report_pacing() {
+  const gt4::pacing::Counters session = pacing_counters();
+  std::fprintf(stderr, "[pacing] report (%s pacing):\n", gt4::pacing::mode_name(g_pacing_mode));
+  g_diagnostics.format(stderr, g_pacing_mode, session.since(g_counters_at_report), session);
+  g_counters_at_report = session;
+  g_diagnostics.reset();
+}
+
+// The VBlank release, as native/window.cpp release_frame (without its frame skip and latency-shift inputs, which the
+// Linux host does not have yet). Paced: wait for the grid deadline, but at least GT4_PACING_MIN_INTERVAL_US (15700)
+// after the previous release, so time lost in a slow stretch comes back at about 1 ms per frame instead of in a burst;
+// a full period behind, the grid restarts. Audio: the sound device paces instead.
+void release_frame() {
+  if (g_pacing_mode == gt4::pacing::Mode::paced) {
+    if (!g_pacer->anchored())
+      g_pacer->anchor(g_clock->now());
+    static const std::int64_t min_interval = [] {
+      const char *text = std::getenv("GT4_PACING_MIN_INTERVAL_US");
+      const std::int64_t microseconds = text != nullptr ? std::atoll(text) : 15700;
+      return microseconds * static_cast<std::int64_t>(g_clock->frequency()) / 1000000;
+    }();
+    const std::int64_t earliest = g_last_release != 0 ? g_last_release + min_interval : 0;
+    g_clock->wait_until(std::max(g_pacer->deadline(), earliest));
+  } else if (g_audio) {
+    g_audio->wait_for_room();
   }
-  // Without audio: the NTSC field rate, 60000/1001 Hz (PAL 50 Hz).
-  const std::uint64_t period_ns = ps2::g_options.pal ? 20000000ull : 16683333ull;
-  const std::uint64_t now = SDL_GetTicksNS();
-  if (g_next_vblank_ns && now < g_next_vblank_ns) {
-    SDL_DelayPrecise(g_next_vblank_ns - now);
-    g_next_vblank_ns += period_ns;
-  } else {
-    g_next_vblank_ns = now + period_ns;
-  }
+  const std::int64_t released = g_clock->now();
+  g_last_release = released;
+  if (g_pacing_mode == gt4::pacing::Mode::paced)
+    g_pacer->release(released);
+  g_diagnostics.record_release(released, g_clock->frequency());
 }
 
 void on_vblank() {
+  release_frame();
   poll_events();
   // Scripted presses (--press) drive the pad on their own, as in the headless runner.
   if (ps2::g_options.presses.empty())
     apply_pad(read_pad());
   update_rumble();
+  if (g_audio) {
+    // Paced mode: rate control and moving ring data to the device, without waiting.
+    g_audio->pump();
+    g_diagnostics.record_queue_frames(g_audio->queued_frames());
+    if (g_audio->mode() == gt4::pacing::Mode::paced)
+      g_diagnostics.record_ratio(g_audio->ratio());
+  }
+  if (g_report_requested) {
+    g_report_requested = false;
+    report_pacing();
+  }
   ps2::gs::present();
-  pace();
-}
-
-void queue_audio(const std::int16_t *samples, std::size_t frames) {
-  if (queued_audio_ms() > kDropAboveMs)
-    return;
-  SDL_PutAudioStreamData(g_audio, samples, static_cast<int>(frames * kAudioChannels * 2));
 }
 
 // Closes the sound and the controller. The window and SDL stay open until the process ends: the native Vulkan context
@@ -221,10 +259,7 @@ void queue_audio(const std::int16_t *samples, std::size_t frames) {
 // window, so destroying the window or the X11/Wayland connection first would crash that destructor.
 void close_all() {
   close_gamepad();
-  if (g_audio) {
-    SDL_DestroyAudioStream(g_audio);
-    g_audio = nullptr;
-  }
+  g_audio.reset();
 }
 
 } // namespace
@@ -253,15 +288,28 @@ bool open_window(bool fullscreen) {
   }
   if (fullscreen)
     SDL_HideCursor();
+  try {
+    g_pacing_mode = gt4::pacing::parse_mode(std::getenv("GT4_PACING"));
+  } catch (const std::exception &error) {
+    std::fprintf(stderr, "[pacing] %s\n", error.what());
+    return false;
+  }
+  g_clock = std::make_unique<FrameClock>();
+  g_pacer = std::make_unique<gt4::pacing::FramePacer>(g_clock->frequency(), gt4::pacing::guest_vblank_rate);
   const char *audio_choice = std::getenv("GT4_AUDIO");
   if (!(audio_choice && std::strcmp(audio_choice, "none") == 0)) {
-    const SDL_AudioSpec spec{SDL_AUDIO_S16, kAudioChannels, kAudioRate};
-    g_audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
-    if (g_audio)
-      SDL_ResumeAudioStreamDevice(g_audio);
-    else
-      std::fprintf(stderr, "[audio] no audio device (%s); paced by the clock\n", SDL_GetError());
+    g_audio = std::make_unique<gt4::linux_host::SdlAudioOutput>(g_pacing_mode);
+    if (g_audio->silent())
+      g_audio.reset();
   }
+  // Without sound the audio mode has no clock: the frame clock paces instead (as on Windows).
+  if (!g_audio && g_pacing_mode == gt4::pacing::Mode::audio) {
+    std::fprintf(stderr, "[pacing] no sound device: paced by the frame clock\n");
+    g_pacing_mode = gt4::pacing::Mode::paced;
+  }
+  std::fprintf(stderr, "[pacing] %s pacing, %llu Hz grid, monotonic clock with nanosleep\n",
+               gt4::pacing::mode_name(g_pacing_mode),
+               static_cast<unsigned long long>(gt4::pacing::guest_vblank_rate));
   open_gamepad();
   std::fprintf(stderr, "[window] SDL %d.%d.%d, video driver %s\n", SDL_VERSIONNUM_MAJOR(SDL_GetVersion()),
                SDL_VERSIONNUM_MINOR(SDL_GetVersion()), SDL_VERSIONNUM_MICRO(SDL_GetVersion()),
@@ -312,7 +360,7 @@ int run_window(const std::function<int()> &emulate) {
   std::fprintf(stderr, "[window] guest GPU output through native Vulkan (%s, %dx%d)\n", driver, width, height);
   ps2::g_options.on_vblank = on_vblank;
   if (g_audio)
-    ps2::set_audio_sink(queue_audio);
+    ps2::set_audio_sink([](const std::int16_t *samples, std::size_t frames) { g_audio->push(samples, frames); });
   int result = 1;
   try {
     result = emulate();
@@ -324,6 +372,7 @@ int run_window(const std::function<int()> &emulate) {
   }
   ps2::set_audio_sink({});
   ps2::g_options.on_vblank = {};
+  report_pacing();
   close_all();
   return result;
 }

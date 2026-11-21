@@ -213,6 +213,11 @@ if(SDL3_FOUND)
     gt4_host_fixture(keyboard_scancodes_fixture keyboard_scancodes_fixture.cpp)
     target_link_libraries(keyboard_scancodes_fixture PRIVATE gt4_controls SDL3::Headers)
     add_test(NAME native_keyboard_scancodes COMMAND $<TARGET_FILE:keyboard_scancodes_fixture>)
+    # TASK-074 L2: the Linux frame clock and the paced audio target (no audio device is opened).
+    gt4_host_fixture(linux_pacing_fixture linux/linux_pacing_fixture.cpp linux/sdl_audio.cpp frame_clock.cpp)
+    target_link_libraries(linux_pacing_fixture PRIVATE gt4_pacing SDL3::SDL3)
+    add_test(NAME native_linux_pacing COMMAND $<TARGET_FILE:linux_pacing_fixture>)
+    set_tests_properties(native_linux_pacing PROPERTIES RUN_SERIAL TRUE TIMEOUT 60)
 endif()
 
 # The guest-hook fixtures assert the v2.00 chains (GT4_HOOK_FIXTURE_LIB, as in the Windows tree).
@@ -359,7 +364,7 @@ if(GT4_LINUX_PORT_DIR OR GT4_LINUX_SHADER_DIR)
             message(STATUS "gt4_linux_window not built: derive GT4_LINUX_PORT_DIR with --linux-surfaces")
         else()
             add_executable(gt4_linux_window "${GT4_LINUX_PORT_DIR}/main.cpp" "${GT4_NATIVE}/linux/sdl_window.cpp"
-                "${GT4_NATIVE}/sdl_gamepad.cpp")
+                "${GT4_NATIVE}/linux/sdl_audio.cpp" "${GT4_NATIVE}/sdl_gamepad.cpp" "${GT4_NATIVE}/frame_clock.cpp")
             target_compile_definitions(gt4_linux_window PRIVATE PS2_WINDOW)
             set_source_files_properties("${GT4_LINUX_PORT_DIR}/main.cpp" TARGET_DIRECTORY gt4_linux_window
                 PROPERTIES COMPILE_OPTIONS "-include;${GT4_NATIVE}/host_compat.hpp")

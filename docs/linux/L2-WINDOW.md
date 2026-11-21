@@ -13,8 +13,12 @@ Gameplay has not been tested by a person yet.
 | X11 window through XWayland (`SDL_VIDEO_DRIVER=x11`) | the same: surface attached, 595 presentations, about 10.7 s | Confirmed |
 | Audio on, paced by the sound device | 600 frames in 10.3 s, clean exit | Confirmed (sound not heard by the agent) |
 | Exit | exit code 0 on both window systems (after the shutdown-order fix below) | Confirmed |
-| CTest, Linux tree | 40/40: adds `native_keyboard_scancodes`; `native_vulkan_extensions` now also checks the Linux selection | Confirmed |
+| CTest, Linux tree | 41/41: adds `native_keyboard_scancodes` and `native_linux_pacing`; `native_vulkan_extensions` now also checks the Linux selection | Confirmed |
 | Python | `test_linux_surfaces.py` 3/3 (synthetic hooks, refused anchors, real derivation changes only the attach) | Confirmed |
+| Frame pacing, paced (default) + FIFO, 1,200 frames with sound | **all 1,199 VBlank intervals in the 16-17 ms bucket**, mean 16.666 ms; 0 late frames, 0 audio underruns, 0 ring overflow; audio queue median 2,858 frames (target 2,880) | Confirmed |
+| Frame pacing, paced + MAILBOX | the same: 1,199 of 1,199 in 16-17 ms, 0 late, 0 underruns, queue median 2,909 | Confirmed |
+| Earlier behaviour (`GT4_PACING=audio`) + FIFO, for comparison | uneven: 269 intervals under 12 ms, 837 at 20-25 ms, 67 at 18-20 ms; queue median 3,328 | Confirmed |
+| Linux frame clock (`native_linux_pacing`) | 60 grid waits: never early, lateness median 0.1 us, maximum 51 us | Confirmed |
 | Gameplay by a person (picture, sound, keyboard, controller, rumble, fullscreen) | not done yet | Unknown |
 
 ## How to run it
@@ -34,12 +38,18 @@ is created on first use. Environment:
 - `GT4_CONTROLS_FILE=<file>`: a controls table such as `docs/controls/keyboard-only.toml` (default: the built-in map,
   the same keys as the README table).
 - `GT4_PAD=<guid>[/<serial>]`: the controller to read (default: the first one connected).
-- `GT4_AUDIO=none`: no sound; the game is then paced by the clock at 60000/1001 Hz.
+- `GT4_PACING=paced` (default) or `audio`: the frame clock releases every VBlank on a 60 Hz grid and the sound is
+  resampled to follow it, or (the earlier rule, for comparison) the sound device paces the game.
+- `GT4_AUDIO_LATENCY_MS=20..500`: the paced audio queue target (default 60). `GT4_PACING_MIN_INTERVAL_US`: the shortest
+  gap between two releases (default 15700).
+- `GT4_PRESENT_MODE=fifo` (default), `mailbox` or `immediate`.
+- `GT4_AUDIO=none`: no sound; the frame clock paces.
 - `SDL_VIDEO_DRIVER=x11` or `wayland`: choose the window system (default: SDL's choice, Wayland on a Wayland session).
 - `VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json`: software Vulkan (slow; for checks only).
 
 Keys: the controls table (default W/Enter = Cross, S = Square, Space = Circle, Backspace/Esc = Triangle, arrows/A/D =
-D-pad, Q/Shift = L1/R1, F/R = L2/R2, C/Tab = Select, P = Start), F11 or Alt+Enter = fullscreen.
+D-pad, Q/Shift = L1/R1, F/R = L2/R2, C/Tab = Select, P = Start), F11 or Alt+Enter = fullscreen, F8 = pacing report
+(printed to the terminal; it also prints when the game closes).
 
 ## Design
 
@@ -62,18 +72,25 @@ D-pad, Q/Shift = L1/R1, F/R = L2/R2, C/Tab = Select, P = Start), F11 or Alt+Ente
   `native/keyboard_scancodes.cpp` translates them to USB HID scancodes, which are SDL's scancode values (the fixture
   checks every nameable key against SDL3's own constants). Gamepads use `read_sdl_gamepad`, moved unchanged from
   `host_io.cpp` to `native/sdl_gamepad.cpp` so both hosts share one table, then `gt4::pad::map_reading`.
-- **Audio and pacing**: an SDL3 audio stream at 48 kHz stereo; the VBlank waits while more than 80 ms of sound is
-  queued (the donor's rule) and drops sound above 500 ms. Presentation is FIFO.
+- **Pacing** (the Windows host's design; `pacing.hpp` is shared and unchanged): `FrameClock` on Linux is
+  `CLOCK_MONOTONIC` with an absolute `clock_nanosleep` and a 0.5 ms final spin (`native/frame_clock.cpp`, behind
+  `#ifndef _WIN32`). At each VBlank `release_frame` waits for the `FramePacer` grid deadline (60 Hz, the donor's guest
+  rate, as on Windows), at least 15.7 ms after the previous release, and restarts the grid a full period behind.
+- **Audio** (`native/linux/sdl_audio.cpp`): an SDL3 stream at 48 kHz stereo. Paced: the guest's sound goes through
+  `LinearResampler` into a `FrameRing`; each VBlank the `RateController` sets the ratio (within ±0.5 %) from the SDL
+  queue plus the ring, and 256-frame blocks go to SDL while the queue stays within the target; underruns and overflow
+  are counted. Audio mode: the earlier 80 ms rule. The F8 report is `pacing::Diagnostics`, as in the Windows F8.
 - **Exit**: the window and SDL stay open until the process ends, because the port's global Vulkan context releases
   its swapchain and surface in its destructor at exit. Destroying the window first crashed (segfault on Wayland, abort
   on X11); now both exit with code 0.
 
 ## Not yet on Linux
 
-- The Windows host's frame clock and audio rate control (`frame_clock.cpp`, `pacing.cpp` modes). With FIFO on a
-  60 Hz display the game runs about 0.1% fast until the audio queue reaches 80 ms, then waits one frame; on a
-  high-refresh display FIFO presents faster and the audio queue holds the average speed, so frame times are uneven.
-  **Hypothesis**, not measured yet.
+- The Windows pacing inputs that come from other features: the frame skip (TASK-082) and the presentation latency
+  shift (IN-521). A display whose refresh rate is not 60 Hz has not been measured (Unknown).
+- Wayland and FIFO: a compositor may stop presenting to a hidden or minimized window, and FIFO then blocks the game
+  until it is shown again. **Hypothesis**, not tested; `GT4_PRESENT_MODE=mailbox` paces the same (measured above) and
+  does not block.
 - `game_main.cpp` features: the game patches (widescreen and display aspect hooks, 360-degree camera, FoV, trigger
   range, flare limits), `game.ini` / standalone start, the memory card lock and backups.
 - Racing wheels, RetroAchievements, the F7/F8 performance probe, input recording and replay, cursor auto-hide.
