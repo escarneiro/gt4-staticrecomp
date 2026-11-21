@@ -267,6 +267,29 @@ if(GT4_DONOR)
     endforeach()
 endif()
 
+if(GT4_DONOR)
+    # TASK-074 L2: the VU microcode recompiler (tools/vu_recomp) and its standalone controls, as in its own
+    # CMakeLists.txt (which the Windows tree uses); they need only the donor headers.
+    set(gt4_vu_src "${CMAKE_SOURCE_DIR}/tools/vu_recomp/src")
+    set(gt4_vu_tests "${CMAKE_SOURCE_DIR}/tools/vu_recomp/tests")
+    set(gt4_vu_donor_includes "${GT4_DONOR}/runtime/include" "${GT4_DONOR}/runtime/src")
+    add_library(gt4_vu_recomp_core STATIC "${gt4_vu_src}/vurecomp.cpp" "${gt4_vu_src}/sha256.cpp")
+    target_include_directories(gt4_vu_recomp_core PUBLIC "${gt4_vu_src}" ${gt4_vu_donor_includes})
+    target_compile_options(gt4_vu_recomp_core PRIVATE ${GT4_WARNINGS})
+    add_executable(gt4_vu_recomp "${gt4_vu_src}/vurecomp_main.cpp")
+    target_link_libraries(gt4_vu_recomp PRIVATE gt4_vu_recomp_core)
+    add_library(gt4_vu_fixtures STATIC "${gt4_vu_tests}/vu_fixtures.cpp")
+    target_include_directories(gt4_vu_fixtures PUBLIC "${gt4_vu_tests}" ${gt4_vu_donor_includes})
+    add_executable(gt4_vu_recomp_core_tests "${gt4_vu_tests}/core_tests.cpp")
+    target_link_libraries(gt4_vu_recomp_core_tests PRIVATE gt4_vu_recomp_core gt4_vu_fixtures)
+    add_executable(gt4_vu0_emitter_tests "${gt4_vu_tests}/vu0_emitter_tests.cpp")
+    target_link_libraries(gt4_vu0_emitter_tests PRIVATE gt4_vu_recomp_core)
+    add_test(NAME vu_recomp_core COMMAND $<TARGET_FILE:gt4_vu_recomp_core_tests>)
+    add_test(NAME vu0_emitter COMMAND $<TARGET_FILE:gt4_vu0_emitter_tests>)
+    set_tests_properties(vu_recomp_core vu0_emitter PROPERTIES RUN_SERIAL TRUE TIMEOUT 1800
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+endif()
+
 if(GT4_LINUX_PRODUCER)
     # The library must be the one ee_producer.py record-library verified and recorded, byte for byte.
     set(gt4_linux_library "${GT4_LINUX_PRODUCER}/game-build/libps2game.a")
@@ -329,8 +352,150 @@ if(GT4_LINUX_PORT_DIR OR GT4_LINUX_SHADER_DIR)
     endif()
 
     gt4_host_library(gt4_install_paths install_paths.cpp)
+
+    # TASK-074 L2 performance: the release profile's VU path. GT4_LINUX_RUNTIME_CAPSULE is a capsule from
+    # scripts/prepare_perf_runtime.py --mtvu (the VU1 worker thread, with the VU0/VU1 AOT registries); its seven sources
+    # must equal the slice178 pins. GT4_LINUX_VU1_GENERATED_DIR / GT4_LINUX_VU0_GENERATED_DIR are tools/vu_recomp output
+    # (production command lines in docs/linux/L2-PERFORMANCE.md) whose tables must equal the slice408 (1.3.0-rc14) pins.
+    # All three together or none; without them the runtime is the donor's (VU interpreter, no worker).
+    set(GT4_LINUX_RUNTIME_CAPSULE "" CACHE PATH "prepare_perf_runtime.py --mtvu capsule")
+    set(GT4_LINUX_VU1_GENERATED_DIR "" CACHE PATH "gt4_vu_recomp VU1 output (vu1_generated.cpp)")
+    set(GT4_LINUX_VU0_GENERATED_DIR "" CACHE PATH "gt4_vu_recomp VU0 output (vu0_generated.cpp)")
+    set(gt4_linux_aot OFF)
+    if(GT4_LINUX_RUNTIME_CAPSULE OR GT4_LINUX_VU1_GENERATED_DIR OR GT4_LINUX_VU0_GENERATED_DIR)
+        if(NOT GT4_LINUX_RUNTIME_CAPSULE OR NOT GT4_LINUX_VU1_GENERATED_DIR OR NOT GT4_LINUX_VU0_GENERATED_DIR)
+            message(FATAL_ERROR "The Linux VU AOT runtime needs GT4_LINUX_RUNTIME_CAPSULE, GT4_LINUX_VU1_GENERATED_DIR "
+                                "and GT4_LINUX_VU0_GENERATED_DIR together")
+        endif()
+        set(gt4_capsule_sources system.cpp vif.cpp vu_micro.cpp gif.cpp memory.cpp hw.cpp dmac.cpp)
+        file(GLOB gt4_capsule_files RELATIVE "${GT4_LINUX_RUNTIME_CAPSULE}" "${GT4_LINUX_RUNTIME_CAPSULE}/*")
+        list(SORT gt4_capsule_files)
+        set(gt4_capsule_expected runtime.json ${gt4_capsule_sources})
+        list(SORT gt4_capsule_expected)
+        if(NOT gt4_capsule_files STREQUAL gt4_capsule_expected)
+            message(FATAL_ERROR "GT4_LINUX_RUNTIME_CAPSULE must hold exactly the --mtvu sources and runtime.json")
+        endif()
+        file(READ "${CMAKE_SOURCE_DIR}/docs/inputs/slice178-main-runtime.json" gt4_capsule_manifest)
+        foreach(source IN LISTS gt4_capsule_sources)
+            string(JSON gt4_capsule_expected_hash GET "${gt4_capsule_manifest}" source_sha256 "${source}")
+            file(SHA256 "${GT4_LINUX_RUNTIME_CAPSULE}/${source}" gt4_capsule_actual_hash)
+            if(NOT gt4_capsule_actual_hash STREQUAL gt4_capsule_expected_hash)
+                message(FATAL_ERROR "Capsule ${source} differs from docs/inputs/slice178-main-runtime.json")
+            endif()
+            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GT4_LINUX_RUNTIME_CAPSULE}/${source}")
+            # The capsule copy replaces the donor file (gif.cpp lives in gs/ in the donor).
+            set(gt4_donor_path "${GT4_DONOR}/runtime/src/${source}")
+            if(source STREQUAL "gif.cpp")
+                set(gt4_donor_path "${GT4_DONOR}/runtime/src/gs/gif.cpp")
+            endif()
+            list(REMOVE_ITEM gt4_donor_runtime "${gt4_donor_path}")
+            list(APPEND gt4_donor_runtime "${GT4_LINUX_RUNTIME_CAPSULE}/${source}")
+        endforeach()
+        # The pinned vu_micro.cpp (scripts/vu1_aot_overlay.inc, vu0_aot_overlay.inc) has two lambdas that return both
+        # std::strtoull (unsigned long long) and std::uint64_t: one type with MSVC, two types on Linux (unsigned long), so
+        # clang and GCC refuse them. The pinned file is checked above; the build compiles a copy with exactly those two
+        # returns cast to std::uint64_t (the same value). The lasting fix belongs in the two overlays, with new pins.
+        file(READ "${GT4_LINUX_RUNTIME_CAPSULE}/vu_micro.cpp" gt4_vu_micro)
+        set(gt4_report_return "if (period) return std::strtoull(period, nullptr, 10);")
+        string(REPLACE "${gt4_report_return}" "" gt4_vu_micro_without "${gt4_vu_micro}")
+        string(LENGTH "${gt4_vu_micro}" gt4_length_with)
+        string(LENGTH "${gt4_vu_micro_without}" gt4_length_without)
+        string(LENGTH "${gt4_report_return}" gt4_length_return)
+        math(EXPR gt4_return_count "(${gt4_length_with} - ${gt4_length_without}) / ${gt4_length_return}")
+        if(NOT gt4_return_count EQUAL 2)
+            message(FATAL_ERROR "Expected the two report_every returns in the capsule vu_micro.cpp, found ${gt4_return_count}")
+        endif()
+        string(REPLACE "${gt4_report_return}"
+            "if (period) return static_cast<std::uint64_t>(std::strtoull(period, nullptr, 10));" gt4_vu_micro "${gt4_vu_micro}")
+        file(WRITE "${CMAKE_BINARY_DIR}/linux_capsule/vu_micro.cpp" "${gt4_vu_micro}")
+        list(REMOVE_ITEM gt4_donor_runtime "${GT4_LINUX_RUNTIME_CAPSULE}/vu_micro.cpp")
+        list(APPEND gt4_donor_runtime "${CMAKE_BINARY_DIR}/linux_capsule/vu_micro.cpp")
+        file(READ "${CMAKE_SOURCE_DIR}/docs/inputs/slice408-pcsx2.json" gt4_release_manifest)
+        string(JSON gt4_vu1_expected GET "${gt4_release_manifest}" vu1_aot generated_source_sha256)
+        string(JSON gt4_vu0_expected GET "${gt4_release_manifest}" vu0_aot table_sha256)
+        file(SHA256 "${GT4_LINUX_VU1_GENERATED_DIR}/vu1_generated.cpp" gt4_vu1_actual)
+        file(SHA256 "${GT4_LINUX_VU0_GENERATED_DIR}/vu0_generated.cpp" gt4_vu0_actual)
+        if(NOT gt4_vu1_actual STREQUAL gt4_vu1_expected OR NOT gt4_vu0_actual STREQUAL gt4_vu0_expected)
+            message(FATAL_ERROR "The VU1/VU0 tables differ from docs/inputs/slice408-pcsx2.json")
+        endif()
+        file(GLOB gt4_vu1_parts "${GT4_LINUX_VU1_GENERATED_DIR}/vu1_generated_*.cpp")
+        list(SORT gt4_vu1_parts)
+        set(gt4_vu_generated "${GT4_LINUX_VU1_GENERATED_DIR}/vu1_generated.cpp" ${gt4_vu1_parts}
+            "${GT4_LINUX_VU0_GENERATED_DIR}/vu0_generated.cpp")
+        set_source_files_properties(${gt4_vu_generated} PROPERTIES COMPILE_OPTIONS "-Wno-unused-label")
+        list(APPEND gt4_donor_runtime ${gt4_vu_generated} "${CMAKE_SOURCE_DIR}/tools/vu_recomp/src/sha256.cpp"
+            "${GT4_NATIVE}/mtvu_bridge.cpp")
+        gt4_host_library(gt4_mtvu_runtime mtvu_runtime.cpp)
+        target_link_libraries(gt4_mtvu_runtime PUBLIC gt4_mtvu_journal gt4_mtvu_measure gt4_perf_probe gt4_quickfix)
+        # The perf accounting layout must match in every unit (native/CMakeLists.txt does the same).
+        target_compile_definitions(gt4_perf_probe PUBLIC GT4_PERF_VU_SPLIT GT4_VU1_AOT GT4_VU0_AOT)
+        set(gt4_linux_aot ON)
+    endif()
+
     add_library(gt4_ps2runtime_vulkan STATIC ${gt4_donor_runtime} "${GT4_LINUX_PORT_DIR}/gs.cpp"
         "${GT4_LINUX_PORT_DIR}/gpu.cpp" "${GT4_NATIVE}/native_vulkan.cpp")
+    # TASK-134 fast headers, on by default as in native/CMakeLists.txt: the donor's runtime headers with exact faster forms
+    # of fp::add, fp::mul, the VU0 macro operations (native/fp4.hpp) and vfix. The release VU0 table includes ps2/fp4.hpp
+    # from this folder. native_vu_fast_ops compares each form with the donor's.
+    option(GT4_FAST_HEADERS "Build the runtime with the exact faster donor headers" ON)
+    if(GT4_FAST_HEADERS)
+        set(GT4_PYTHON "${CMAKE_SOURCE_DIR}/private/tooling-venv/bin/python" CACHE FILEPATH "Python for the derivation scripts")
+        set(gt4_fast_headers "${CMAKE_BINARY_DIR}/fast_headers")
+        execute_process(COMMAND "${GT4_PYTHON}" -I "${CMAKE_SOURCE_DIR}/scripts/prepare_fast_headers.py" "${GT4_DONOR}"
+                        "${gt4_fast_headers}" RESULT_VARIABLE gt4_fast_result)
+        if(NOT gt4_fast_result EQUAL 0)
+            message(FATAL_ERROR "scripts/prepare_fast_headers.py failed")
+        endif()
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/scripts/prepare_fast_headers.py"
+            "${GT4_NATIVE}/fp4.hpp")
+        target_include_directories(gt4_ps2runtime_vulkan BEFORE PUBLIC "${gt4_fast_headers}")
+        add_executable(vu_fast_ops_fixture "${GT4_NATIVE}/vu_fast_ops_fixture.cpp")
+        target_include_directories(vu_fast_ops_fixture PRIVATE "${gt4_fast_headers}" "${CMAKE_SOURCE_DIR}/tools/vu_recomp/src"
+            "${GT4_DONOR}/runtime/include" "${GT4_DONOR}/runtime/src" "${GT4_NATIVE}")
+        add_test(NAME native_vu_fast_ops COMMAND $<TARGET_FILE:vu_fast_ops_fixture>)
+    elseif(gt4_linux_aot)
+        message(FATAL_ERROR "The release VU0 table needs GT4_FAST_HEADERS (it includes ps2/fp4.hpp)")
+    endif()
+    if(gt4_linux_aot)
+        target_include_directories(gt4_ps2runtime_vulkan PUBLIC "${CMAKE_SOURCE_DIR}/tools/vu_recomp/src")
+        target_compile_definitions(gt4_ps2runtime_vulkan PUBLIC GT4_PERF_PROBE)
+        target_link_libraries(gt4_ps2runtime_vulkan PUBLIC gt4_mtvu_runtime)
+
+        # The AOT controls of tools/vu_recomp (registered as in the root CMakeLists.txt): the emitter's fixture corpus
+        # against the donor interpreter, and the release VU1/VU0 tables in the linked runtime against the interpreter.
+        set(gt4_vu_fixture_root "${CMAKE_BINARY_DIR}/vu_recomp")
+        add_executable(gt4_vu_fixture_writer "${gt4_vu_tests}/fixture_writer.cpp")
+        target_link_libraries(gt4_vu_fixture_writer PRIVATE gt4_vu_fixtures)
+        add_custom_command(
+            OUTPUT "${gt4_vu_fixture_root}/generated/vu1_generated.cpp" "${gt4_vu_fixture_root}/generated/manifest.json"
+            COMMAND "${CMAKE_COMMAND}" -E rm -rf "${gt4_vu_fixture_root}/corpus" "${gt4_vu_fixture_root}/generated"
+            COMMAND $<TARGET_FILE:gt4_vu_fixture_writer> "${gt4_vu_fixture_root}/corpus"
+            COMMAND $<TARGET_FILE:gt4_vu_recomp> "${gt4_vu_fixture_root}/corpus" "${gt4_vu_fixture_root}/generated"
+            DEPENDS gt4_vu_fixture_writer gt4_vu_recomp VERBATIM)
+        add_executable(gt4_vu_differential_tests "${gt4_vu_tests}/differential_tests.cpp" "${gt4_vu_tests}/gif_capture.cpp"
+            "${gt4_vu_fixture_root}/generated/vu1_generated.cpp")
+        set_source_files_properties("${gt4_vu_fixture_root}/generated/vu1_generated.cpp" PROPERTIES
+            COMPILE_OPTIONS "-Wno-unused-label")
+        add_executable(gt4_vu1_aot_registry_test "${gt4_vu_tests}/vu1_aot_registry_test.cpp" "${gt4_vu_tests}/gif_capture.cpp")
+        add_executable(gt4_vu0_differential_tests "${gt4_vu_tests}/vu0_differential_tests.cpp" "${gt4_vu_tests}/gif_capture.cpp")
+        add_executable(gt4_vu0_aot_registry_test "${gt4_vu_tests}/vu0_aot_registry_test.cpp" "${gt4_vu_tests}/gif_capture.cpp")
+        foreach(vu_test IN ITEMS gt4_vu_differential_tests gt4_vu1_aot_registry_test gt4_vu0_differential_tests
+                                 gt4_vu0_aot_registry_test)
+            target_include_directories(${vu_test} PRIVATE "${gt4_vu_src}" "${gt4_vu_tests}")
+            target_link_libraries(${vu_test} PRIVATE gt4_vu_fixtures gt4_ps2runtime_vulkan)
+        endforeach()
+        set(GT4_LINUX_VU0_IMAGE "" CACHE FILEPATH "Pinned VU0 image (scripts/vu0_image.py build) for the VU0 AOT controls")
+        add_test(NAME vu_recomp_differential COMMAND $<TARGET_FILE:gt4_vu_differential_tests>)
+        add_test(NAME vu1_aot_registry COMMAND $<TARGET_FILE:gt4_vu1_aot_registry_test>)
+        set_tests_properties(vu_recomp_differential vu1_aot_registry PROPERTIES RUN_SERIAL TRUE TIMEOUT 1800
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" ENVIRONMENT "GT4_VU_CORPUS_DIR=")
+        if(GT4_LINUX_VU0_IMAGE)
+            add_test(NAME vu0_aot_registry COMMAND $<TARGET_FILE:gt4_vu0_aot_registry_test> "${GT4_LINUX_VU0_IMAGE}")
+            add_test(NAME vu0_aot_differential COMMAND $<TARGET_FILE:gt4_vu0_differential_tests> "${GT4_LINUX_VU0_IMAGE}")
+            set_tests_properties(vu0_aot_registry vu0_aot_differential PROPERTIES RUN_SERIAL TRUE TIMEOUT 3600
+                WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+        endif()
+    endif()
     target_include_directories(gt4_ps2runtime_vulkan PUBLIC "${GT4_DONOR}/runtime/include" "${GT4_DONOR}/runtime/src"
         "${GT4_DONOR}/runtime/src/gs" "${GT4_NATIVE}" "${GT4_LINUX_PORT_DIR}")
     target_compile_definitions(gt4_ps2runtime_vulkan PUBLIC PS2_GPU GT4_VULKAN_SHADER_DIR="${GT4_LINUX_SHADER_DIR}")

@@ -148,7 +148,7 @@ See [GS renderer options](docs/GS-RENDERER-OPTIONS.md) and [GSDX-PLAN](docs/GSDX
 | TASK‑136 | Simple onboarding: a new install uses CoreGS 2.0 when the PC runs it, GSdx becomes optional and is downloaded only when the card needs it | 🧪 Built, waits for the owner's test (branch `task/136-simple-onboarding`, 2026-11-02) |
 | TASK‑137 | The launcher links the disc image and no longer copies it; an image that moved asks to be chosen again; installs with a copy keep working | 🧪 Built, waits for the owner's test (branch `task/137-link-disc-image`, candidate 381, 2026-11-02) |
 | TASK‑138 | A portable folder carries its disc image (relative link); accented paths on CoreGS 2.0; the GSdx fallback goes to CoreGS 2.0; a release can be started directly | 🧪 Built, waits for the owner's test (branch `task/138-relative-image-link`, candidate 382, 2026-11-02); GSdx in an accented folder not confirmed |
-| TASK‑074 | Native Linux x86-64 build (SDL3 platform layer, Linux gt4-gs owning the window, Linux packaging) | 🔧 L1 in progress (2026-11-20, branch `task/074-linux-host-build`): host-only CMake build 36/36 CTest (clang, GCC); EE sources regenerated on Linux byte-identical to the frozen inventory, Linux candidate `libps2game.a`, headless boot to the name entry; native Vulkan GS backend headless on RADV and lavapipe. 🔧 L2 started: the game runs in an SDL3 window on Wayland and X11 with sound and controls (preview, base game only; owner gameplay test pending); frame pacing from the Windows host (60 Hz grid, resampled audio): every VBlank interval in 16-17 ms, CTest 41/41 ([plan](docs/linux/PLAN.md), [host build](docs/linux/HOST-BUILD.md), [game library](docs/linux/L1-GAME-LIBRARY.md)) |
+| TASK‑074 | Native Linux x86-64 build (SDL3 platform layer, Linux gt4-gs owning the window, Linux packaging) | 🔧 L1 in progress (2026-11-20, branch `task/074-linux-host-build`): host-only CMake build 36/36 CTest (clang, GCC); EE sources regenerated on Linux byte-identical to the frozen inventory, Linux candidate `libps2game.a`, headless boot to the name entry; native Vulkan GS backend headless on RADV and lavapipe. 🔧 L2 started: the game runs in an SDL3 window on Wayland and X11 with sound and controls (preview, base game only; owner gameplay test pending); frame pacing from the Windows host (60 Hz grid, resampled audio): every VBlank interval in 16-17 ms; release VU path (VU1/VU0 AOT, MTVU, fast headers) built on Linux identical to the rc14 pins, CTest 48/48 ([plan](docs/linux/PLAN.md), [host build](docs/linux/HOST-BUILD.md), [game library](docs/linux/L1-GAME-LIBRARY.md)) |
 | 🧩 | **gt4-gs 1.0.0, the first stable renderer release** (with TASK‑060/061/062; settings allow-list enforced) | ✅ Published 2026-10-16 (`gt4gs-v1.0.0`, zip sha256 `2e878019...`) |
 | 🚀 | **First stable release (1.0.0) on GitHub** (after TASK‑044, TASK‑043 and the owner's end-to-end test) | 📋 Planned |
 
@@ -1599,6 +1599,16 @@ like `window.cpp` `release_frame`; `native/linux/sdl_audio.cpp` resamples into a
 (`GT4_PACING=audio` keeps the earlier rule for A/B); F8 and exit print `pacing::Diagnostics`. Measured over 1,200 frames
 with sound: all 1,199 intervals in 16-17 ms, 0 late frames, 0 underruns, queue median 2,858 frames for a 2,880 target
 (the earlier rule: 269 intervals under 12 ms and 837 at 20-25 ms). New fixture `native_linux_pacing`.
+
+Progress (2026-11-20, same branch, L2 performance): owner report before it (demanding scene): mean 17.75 ms, 2,201 of 2,267
+frames late, 853 underruns. On Linux the `--mtvu` capsule's 7 sources are byte-identical to the slice172/178 pins; the VU1
+image (new `vu1_image.py build --pinned-tail`), the 2,048-program VU1 table and the 14-program VU0 table equal the slice408
+(rc14) pins. The Linux CMake builds `gt4_vu_recomp`, the optional AOT runtime with the VU1 worker and fast headers, and the
+VU differential tests (VU0: 28,000 seeded states, 0 failures). AOT output is byte-identical to the interpreter build (12/12
+frames, same cycles). Intro movie in a window: 21 late frames and 18 underruns before, 0 and 0 after (all 2,499 intervals in
+16-17 ms). The capsule's `vu_micro.cpp` needs two `std::uint64_t` casts on Linux (two types there, one with MSVC), applied
+to a build copy after the pin check; the lasting fix needs new overlay pins (owner decision). Not measured yet: the owner's
+demanding scene. Details: [docs/linux/L2-PERFORMANCE.md](docs/linux/L2-PERFORMANCE.md).
 
 ### TASK-018 — Racing wheels
 
