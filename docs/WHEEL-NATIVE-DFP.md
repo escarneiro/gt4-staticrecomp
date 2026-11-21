@@ -160,7 +160,11 @@ player is Linux-specific.
   SET_CONFIGURATION 1), polled it (9,000+ reports in 75 s) and sent `F8 06`, `F3`, `F4`, `F8 03` (900 degrees), `F5` and
   `21 0B` (the menu spring): the Windows sequence above. A Logitech G29 (046d:c24f, driver hid-logitech-new) is seen by
   SDL3 as a wheel with 4 axes, 25 buttons, a hat and constant/spring/damper/friction/gain/autocentre haptics.
-  Not yet: a drive with the physical wheel.
+- **Tester drive (2026-11-21, Logitech G29, Linux):** steering, pedals, paddle shifters, buttons and force feedback all work.
+  On this G29 under hid-logitech-new, SDL3 orders the pedal axes **1 clutch, 2 throttle, 3 brake** (not the generic default
+  1 throttle, 2 brake, 3 clutch), so the file needs `[throttle] source = "axis:2"` and `[brake] source = "axis:3"`. The
+  clutch is not used: the DFP has no clutch input, so `[clutch]` is parsed and never reaches the game (a clutch would be an
+  opt-in gameplay mod, decision 0073).
 
 ## Known limits
 
