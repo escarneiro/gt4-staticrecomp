@@ -5,7 +5,8 @@
 # Usage: scripts/linux/play.sh <disc image> <memory card file> [game arguments...]
 #
 # Environment (each optional):
-#   GT4_LINUX_BUILD     build folder holding gt4_linux_window (default: private/linux074-release-build)
+#   GT4_LINUX_BUILD     build folder holding gt4_linux_window (default: private/linux074-pgo-build, the PGO and
+#                       ThinLTO build of scripts/linux/pgo-build.sh, else private/linux074-release-build)
 #   GT4_LINUX_ELF       the reconstructed game executable (default: private/linux074-ee-producer/SCUS_973.28.elf)
 #   GT4_LINUX_RENDERER  coregs2 (default) or coregs1 (the native Vulkan backend)
 #   GT4_HW_SCALE        CoreGS 2.0 internal resolution multiplier, 1..12 (default 3)
@@ -24,7 +25,8 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 disc=$1
 card=$2
 shift 2
-build=${GT4_LINUX_BUILD:-$root/private/linux074-release-build}
+build=${GT4_LINUX_BUILD:-$root/private/linux074-pgo-build}
+[[ -n ${GT4_LINUX_BUILD:-} || -x $build/gt4_linux_window ]] || build=$root/private/linux074-release-build
 elf=${GT4_LINUX_ELF:-$root/private/linux074-ee-producer/SCUS_973.28.elf}
 
 # The launcher's fixed settings: races at 480p, the game's own 16:9, the display aspect from the window, fifo.

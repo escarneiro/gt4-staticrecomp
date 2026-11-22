@@ -67,14 +67,15 @@ the MTVU worker, CoreGS 2.0 and the window host. So the options apply to the who
   a ThinLTO cache in the build folder.
 
 Both need clang. They are off by default, so a build without them is unchanged. `scripts/linux/pgo-build.sh` copies
-every `GT4_*` setting of the plain release build (`private/linux074-release-build`), so units, capsules and pins
+every `GT4_*` setting of the plain release build (`private/linux074-release-build`, else the PGO build's own cache),
+so units, capsules and pins
 match, and runs the three steps:
 
 ```sh
 scripts/linux/pgo-build.sh instrument                 # private/linux074-pgo-gen
 scripts/linux/pgo-build.sh train <disc> <card>        # play: menus, a day race, a night race; close the window
 scripts/linux/pgo-build.sh optimize                   # private/linux074-pgo-build (PGO + ThinLTO)
-GT4_LINUX_BUILD=$PWD/private/linux074-pgo-build scripts/linux/play.sh <disc> <card>
+scripts/linux/play.sh <disc> <card>                   # uses private/linux074-pgo-build when it exists
 ```
 
 First results (2026-11-22, Ryzen 12 threads, clang 23.1.4, llvm 23.1.6; one played training session):

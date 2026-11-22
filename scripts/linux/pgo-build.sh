@@ -11,15 +11,17 @@
 #                                                    GT4_LINUX_BUILD=private/linux074-pgo-build scripts/linux/play.sh ...
 #
 # Every GT4_* setting is copied from the plain release build (GT4_LINUX_BASE_BUILD, default
-# private/linux074-release-build), so the PGO build gets the same units, capsules and pins. The profile holds only
+# private/linux074-release-build, else private/linux074-pgo-build), so the PGO build gets the same units, capsules and pins. The profile holds only
 # function hashes and counters, but of code translated from the game: it stays in private/.
 # Needs llvm-profdata, llvm-ar and llvm-ranlib of the clang in use (openSUSE: zypper install llvm).
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
-base=${GT4_LINUX_BASE_BUILD:-$root/private/linux074-release-build}
 gen=$root/private/linux074-pgo-gen
 use=$root/private/linux074-pgo-build
+# The settings come from the plain release build, else from the PGO build itself (it carries the same GT4_* entries).
+base=${GT4_LINUX_BASE_BUILD:-$root/private/linux074-release-build}
+if [[ -z ${GT4_LINUX_BASE_BUILD:-} && ! -f $base/CMakeCache.txt && -f $use/CMakeCache.txt ]]; then base=$use; fi
 profiles=$root/private/linux074-pgo
 step=${1:-}
 
@@ -67,7 +69,15 @@ optimize)
     raw=("$profiles"/raw/*.profraw)
     [[ ${#raw[@]} -gt 0 ]] || { echo "no profiles in $profiles/raw: run '$0 train' and close the window normally" >&2; exit 2; }
     "$(tool llvm-profdata)" merge -o "$profiles/game.profdata" "${raw[@]}"
-    # Objects from an earlier profile must not survive into the ThinLTO link: start from an empty folder.
+    # Objects from an earlier profile must not survive into the ThinLTO link: start from an empty folder (keeping its
+    # settings when they are the base).
+    if [[ $base == "$use" ]]; then
+        mkdir -p "$profiles"
+        cp "$use/CMakeCache.txt" "$profiles/base-CMakeCache.txt"
+        base=$profiles/base-settings
+        mkdir -p "$base"
+        cp "$profiles/base-CMakeCache.txt" "$base/CMakeCache.txt"
+    fi
     rm -rf "$use"
     configure_and_build "$use" -DGT4_LINUX_PGO=use "-DGT4_LINUX_PGO_PROFILE=$profiles/game.profdata" -DGT4_LINUX_THINLTO=ON
     ( cd "$use" && sha256sum gt4_linux_window "$profiles/game.profdata" | tee receipt.txt )
