@@ -142,6 +142,10 @@ using Environment = std::vector<std::pair<std::string, std::string>>;
 // async_gs, performance_report, check_vu_code.
 Environment config_environment(const Config &config);
 
+// The variables the launcher sets for a CoreGS 2.0 session (renderer, core and the hw_* keys; launch.rs
+// coregs20_environment). Also used by the Linux start (native/linux/linux_standalone.cpp).
+Environment coregs20_environment(const Config &config);
+
 // ---- Defaults and the final environment ---------------------------------------------------------------------------------
 
 // GSdx, 480p, 16:9 hold, automatic ultrawide, fullscreen, vsync.

@@ -168,6 +168,12 @@ gt4_host_fixture(standalone_fixture standalone_fixture.cpp standalone.cpp)
 target_link_libraries(standalone_fixture PRIVATE gt4_pad_mapping)
 target_compile_definitions(standalone_fixture PRIVATE GT4_STANDALONE_SAMPLE_DIR="${GT4_NATIVE}/standalone_samples")
 add_test(NAME native_standalone COMMAND $<TARGET_FILE:standalone_fixture>)
+# TASK-074: the Linux direct start from game.ini (native/linux/linux_standalone.cpp, on top of the shared key rules).
+gt4_host_library(gt4_linux_standalone linux/linux_standalone.cpp standalone.cpp)
+target_link_libraries(gt4_linux_standalone PUBLIC gt4_pad_mapping)
+gt4_host_fixture(linux_standalone_fixture linux/linux_standalone_fixture.cpp)
+target_link_libraries(linux_standalone_fixture PRIVATE gt4_linux_standalone)
+add_test(NAME native_linux_standalone COMMAND $<TARGET_FILE:linux_standalone_fixture>)
 
 gt4_host_fixture(game_target_fixture game_target_fixture.cpp game_target_spec2_fixture.cpp)
 set_source_files_properties("${GT4_NATIVE}/game_target_fixture.cpp" PROPERTIES COMPILE_DEFINITIONS GT4_TARGET_FIXTURE_V200)
@@ -756,7 +762,7 @@ sys.exit(0 if digest == pin else 1)
             set_source_files_properties("${GT4_LINUX_PORT_DIR}/main.cpp" PROPERTIES
                 COMPILE_OPTIONS "-include;${GT4_NATIVE}/host_compat.hpp")
             target_compile_options(gt4_linux_window PRIVATE ${GT4_WARNINGS})
-            target_link_libraries(gt4_linux_window PRIVATE gt4_controls gt4_pad_mapping gt4_wheel SDL3::SDL3
+            target_link_libraries(gt4_linux_window PRIVATE gt4_controls gt4_pad_mapping gt4_wheel gt4_linux_standalone SDL3::SDL3
                 "$<LINK_GROUP:RESCAN,${gt4_linux_library},gt4_patch_hooks,gt4_ps2runtime_vulkan>")
         endif()
 
