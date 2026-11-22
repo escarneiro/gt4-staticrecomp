@@ -38,6 +38,56 @@ elseif(GT4_SSE41)
     add_compile_options(-msse4.1)
 endif()
 
+# TASK-074 L2 performance: profile-guided optimisation and ThinLTO of the whole Linux game, as the Windows release does
+# (scripts/coregs2_bench/pgo-all.sh: the EE units, the VU AOT code, the runtime, the VU1 worker and the GS libraries
+# from one profile). Here every one of them is built in this tree (the release units in gt4_game_units), so the flags
+# apply to the whole directory. GT4_LINUX_PGO=generate instruments (a run writes LLVM_PROFILE_FILE when main returns,
+# for example when the window is closed); GT4_LINUX_PGO=use optimises from GT4_LINUX_PGO_PROFILE (llvm-profdata merge
+# output). Driven by scripts/linux/pgo-build.sh. Off by default: a build without these options is unchanged.
+set(GT4_LINUX_PGO "" CACHE STRING "Whole-game PGO on Linux: empty, generate or use")
+set_property(CACHE GT4_LINUX_PGO PROPERTY STRINGS "" generate use)
+set(GT4_LINUX_PGO_PROFILE "" CACHE FILEPATH "Merged profile (llvm-profdata merge) for GT4_LINUX_PGO=use")
+option(GT4_LINUX_THINLTO "ThinLTO of the whole Linux game (links with lld)" OFF)
+if(GT4_LINUX_PGO OR GT4_LINUX_THINLTO)
+    if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        message(FATAL_ERROR "GT4_LINUX_PGO and GT4_LINUX_THINLTO need clang++ (-DCMAKE_CXX_COMPILER=clang++)")
+    endif()
+endif()
+if(GT4_LINUX_PGO STREQUAL "generate")
+    add_compile_options(-fprofile-generate)
+    add_link_options(-fprofile-generate)
+elseif(GT4_LINUX_PGO STREQUAL "use")
+    if(NOT EXISTS "${GT4_LINUX_PGO_PROFILE}")
+        message(FATAL_ERROR "GT4_LINUX_PGO=use needs GT4_LINUX_PGO_PROFILE")
+    endif()
+    add_compile_options("-fprofile-use=${GT4_LINUX_PGO_PROFILE}" -Wno-profile-instr-out-of-date
+        -Wno-profile-instr-unprofiled -Wno-backend-plugin)
+    # A new profile changes every object: rebuild them all when it changes.
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GT4_LINUX_PGO_PROFILE}")
+    file(SHA256 "${GT4_LINUX_PGO_PROFILE}" gt4_pgo_profile_sha256)
+    add_compile_definitions(GT4_LINUX_PGO_PROFILE_SHA256="${gt4_pgo_profile_sha256}")
+    message(STATUS "Linux PGO profile: ${GT4_LINUX_PGO_PROFILE} (sha256 ${gt4_pgo_profile_sha256})")
+elseif(GT4_LINUX_PGO)
+    message(FATAL_ERROR "Unknown GT4_LINUX_PGO '${GT4_LINUX_PGO}'; expected generate, use or empty")
+endif()
+if(GT4_LINUX_THINLTO)
+    add_compile_options(-flto=thin)
+    # --no-dependent-libraries: bitcode objects carry their `#pragma comment(lib, ...)` requests into the link, and the
+    # only ones in the tree name Windows libraries (bcrypt.lib in gs_stream_client.cpp, winmm.lib in frame_clock.cpp).
+    add_link_options(-flto=thin -fuse-ld=lld "-Wl,--thinlto-cache-dir=${CMAKE_BINARY_DIR}/thinlto-cache"
+        -Wl,--no-dependent-libraries)
+    # The archives hold LLVM bitcode: their symbol index must come from the LLVM archiver for lld to find members.
+    get_filename_component(gt4_clang_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    string(REGEX MATCH "^[0-9]+" gt4_clang_major "${CMAKE_CXX_COMPILER_VERSION}")
+    find_program(GT4_LLVM_AR NAMES llvm-ar llvm-ar-${gt4_clang_major} HINTS "${gt4_clang_dir}")
+    find_program(GT4_LLVM_RANLIB NAMES llvm-ranlib llvm-ranlib-${gt4_clang_major} HINTS "${gt4_clang_dir}")
+    if(NOT GT4_LLVM_AR OR NOT GT4_LLVM_RANLIB)
+        message(FATAL_ERROR "GT4_LINUX_THINLTO needs llvm-ar and llvm-ranlib (openSUSE: zypper install llvm)")
+    endif()
+    set(CMAKE_AR "${GT4_LLVM_AR}")
+    set(CMAKE_RANLIB "${GT4_LLVM_RANLIB}")
+endif()
+
 set(GT4_TARGET "v200" CACHE STRING "Game target for the host hooks")
 set_property(CACHE GT4_TARGET PROPERTY STRINGS v200 spec2)
 if(GT4_TARGET STREQUAL "spec2")

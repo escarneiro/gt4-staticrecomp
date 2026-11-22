@@ -53,6 +53,49 @@ cmake -S . -B <build dir> ... -DGT4_LINUX_RUNTIME_CAPSULE=$PWD/private/<capsule>
 CMake refuses a capsule whose sources differ from `slice178-main-runtime.json` and tables that differ from
 `slice408-pcsx2.json`. `GT4_MTVU=0` turns the worker off at run time (as on Windows).
 
+## PGO and ThinLTO (whole game)
+
+The Linux counterpart of `scripts/coregs2_bench/pgo-all.sh`. On Linux every part of the game is built in one CMake
+tree: the release EE units (`gt4_game_units`, already with the fast headers), the VU AOT tables, the runtime capsules,
+the MTVU worker, CoreGS 2.0 and the window host. So the options apply to the whole directory:
+
+- `-DGT4_LINUX_PGO=generate`: instrumented build. A run writes `LLVM_PROFILE_FILE` when `main` returns (closing the
+  window does that; Ctrl-C or a crash writes nothing).
+- `-DGT4_LINUX_PGO=use -DGT4_LINUX_PGO_PROFILE=<merged .profdata>`: optimised from the profile. The profile's SHA-256
+  is a compile definition, so a new profile rebuilds every object.
+- `-DGT4_LINUX_THINLTO=ON`: ThinLTO with lld (`-fuse-ld=lld`), `llvm-ar`/`llvm-ranlib` for the bitcode archives, and
+  a ThinLTO cache in the build folder.
+
+Both need clang. They are off by default, so a build without them is unchanged. `scripts/linux/pgo-build.sh` copies
+every `GT4_*` setting of the plain release build (`private/linux074-release-build`), so units, capsules and pins
+match, and runs the three steps:
+
+```sh
+scripts/linux/pgo-build.sh instrument                 # private/linux074-pgo-gen
+scripts/linux/pgo-build.sh train <disc> <card>        # play: menus, a day race, a night race; close the window
+scripts/linux/pgo-build.sh optimize                   # private/linux074-pgo-build (PGO + ThinLTO)
+GT4_LINUX_BUILD=$PWD/private/linux074-pgo-build scripts/linux/play.sh <disc> <card>
+```
+
+First results (2026-11-22, Ryzen 12 threads, clang 23.1.4, llvm 23.1.6; one played training session):
+
+| Check | Result | Label |
+|---|---|---|
+| Builds | instrumented 2 min 36 s, PGO + ThinLTO 2 min 53 s (12 threads) | Confirmed |
+| Headless boot run, 4,000 frames, CoreGS 2.0 at 1x, warm shader cache, interleaved 3+3 | plain 11.12-11.18 s, PGO 9.58-9.60 s: **-14% wall time** | Confirmed (this scene only) |
+| Guest behaviour | the same 19,661,277,185 EE cycles in all runs | Confirmed |
+| Frames, native backend, every 250th of 4,000 | **16 of 16 byte-identical** to the plain build (16 distinct images) | Confirmed |
+| A race played on the PGO build | not yet (tester) | Unknown |
+
+The headless run covers boot, the intro and the menus, not a race, so the gain in a race may differ. The ThinLTO link needs
+`-Wl,--no-dependent-libraries`: bitcode objects pass their `#pragma comment(lib, ...)` requests (Windows libraries
+only) to lld, which then fails on `bcrypt.lib`.
+
+Training is a played session, not a headless replay: the Windows bench's recorded drives and their cards
+(`private/coregs2-bench`) are not on this machine. The profiles (`private/linux074-pgo/`) hold only hashes and
+counters of translated game code, and they stay private. The tools come from the `llvm` package of the same major
+version as clang (llvm-profdata, llvm-ar, llvm-ranlib).
+
 ## Changes
 
 - `scripts/vu1_image.py build --pinned-tail`: builds the image without the recorded snapshots; the 16 tail bytes come
@@ -74,6 +117,7 @@ CMake refuses a capsule whose sources differ from `slice178-main-runtime.json` a
 - The rest of the release runtime profile: the frame-cost capsule (frame skip, TASK-082/084), the IPU fast decoder
   (`slice365-ipu-fast-runtime`), the SPU2, memory-card and license-guard capsules. The USB capsule and the racing wheel
   are in (`GT4_LINUX_USB_RUNTIME`, docs/WHEEL-NATIVE-DFP.md "Linux").
-- The EE game library with fast headers and PGO/ThinLTO, as the release builds it; the Linux library is plain `-O3`.
+- PGO and ThinLTO are wired in (see "PGO and ThinLTO" above). The plain release build stays plain `-O3`, with the fast
+  headers.
 - CoreGS 2.0 (upscaling and anti-aliasing; the CoreGS 1.1 backend renders at 1x with nearest scaling). The flicker
   went away with the AOT build, which points at late frames rather than the backend (hypothesis).
