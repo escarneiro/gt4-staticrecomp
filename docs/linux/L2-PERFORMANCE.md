@@ -85,9 +85,9 @@ First results (2026-11-22, Ryzen 12 threads, clang 23.1.4, llvm 23.1.6; one play
 | Headless boot run, 4,000 frames, CoreGS 2.0 at 1x, warm shader cache, interleaved 3+3 | plain 11.12-11.18 s, PGO 9.58-9.60 s: **-14% wall time** | Confirmed (this scene only) |
 | Guest behaviour | the same 19,661,277,185 EE cycles in all runs | Confirmed |
 | Frames, native backend, every 250th of 4,000 | **16 of 16 byte-identical** to the plain build (16 distinct images) | Confirmed |
-| A race played on the PGO build | not yet (tester) | Unknown |
+| A race played on the PGO build | tester (2026-11-22): "feels smoother" than the plain build; not measured | Confirmed (subjective) |
 
-The headless run covers boot, the intro and the menus, not a race, so the gain in a race may differ. The ThinLTO link needs
+The headless run covers boot, the intro and the menus, not a race; the race gain has not been measured. The ThinLTO link needs
 `-Wl,--no-dependent-libraries`: bitcode objects pass their `#pragma comment(lib, ...)` requests (Windows libraries
 only) to lld, which then fails on `bcrypt.lib`.
 
