@@ -10,6 +10,9 @@
 #                                                    (private/linux074-pgo-build); play it with
 #                                                    GT4_LINUX_BUILD=private/linux074-pgo-build scripts/linux/play.sh ...
 #
+# GT4_LINUX_GAME=spec2 does the same for Spec II (docs/linux/L2-SPEC2.md): private/linux074-spec2-build as the plain build,
+# private/linux074-spec2-pgo-gen, linux074-spec2-pgo and linux074-spec2-pgo-build.
+#
 # Every GT4_* setting is copied from the plain release build (GT4_LINUX_BASE_BUILD, default
 # private/linux074-release-build, else private/linux074-pgo-build), so the PGO build gets the same units, capsules and pins. The profile holds only
 # function hashes and counters, but of code translated from the game: it stays in private/.
@@ -17,12 +20,17 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
-gen=$root/private/linux074-pgo-gen
-use=$root/private/linux074-pgo-build
+case ${GT4_LINUX_GAME:-gt4} in
+    gt4)   prefix=linux074; plain=linux074-release-build ;;
+    spec2) prefix=linux074-spec2; plain=linux074-spec2-build ;;
+    *)     echo "GT4_LINUX_GAME must be gt4 or spec2" >&2; exit 2 ;;
+esac
+gen=$root/private/$prefix-pgo-gen
+use=$root/private/$prefix-pgo-build
 # The settings come from the plain release build, else from the PGO build itself (it carries the same GT4_* entries).
-base=${GT4_LINUX_BASE_BUILD:-$root/private/linux074-release-build}
+base=${GT4_LINUX_BASE_BUILD:-$root/private/$plain}
 if [[ -z ${GT4_LINUX_BASE_BUILD:-} && ! -f $base/CMakeCache.txt && -f $use/CMakeCache.txt ]]; then base=$use; fi
-profiles=$root/private/linux074-pgo
+profiles=$root/private/$prefix-pgo
 step=${1:-}
 
 base_arguments() {  # the plain build's compiler and GT4_* cache entries as -D arguments, one per line

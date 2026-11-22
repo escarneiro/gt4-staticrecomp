@@ -6,6 +6,10 @@ A start with an ELF argument (`play.sh`, the benches, the pins) is unchanged. Th
 start (TASK-097, `native/standalone.cpp`), without the Windows install layout (receipt, launcher lock, sessions), which
 belongs with a Linux launcher (step L4).
 
+Spec II (`GT4_TARGET=spec2`, [L2-SPEC2](L2-SPEC2.md)) reads `game-spec2.ini` instead, finds its ELF
+(`SCUS_974.36`) in `private/linux074-spec2-elf` and defaults to its own card `card-spec2.ps2`; keys and precedence are
+the same (`native/linux/linux_standalone.hpp` `kV200Game` / `kSpec2Game`).
+
 ## Folders
 
 | What | Where |

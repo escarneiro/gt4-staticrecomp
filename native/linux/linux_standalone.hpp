@@ -1,6 +1,7 @@
 #pragma once
 
-// TASK-074 (Linux): the game starts on its own, from game.ini, without environment variables or scripts.
+// TASK-074 (Linux): the game starts on its own, from game.ini (game-spec2.ini for Spec II), without environment
+// variables or scripts.
 //
 // The Linux counterpart of native/standalone.hpp (TASK-097). A start without an ELF argument (no arguments, or only `--`
 // options: gt4::standalone::is_standalone_start) reads `game.ini` from the user's config folder
@@ -33,6 +34,24 @@ namespace gt4::linux_start {
 
 using standalone::Environment;
 
+// What differs between the two games' direct starts (TASK-100: Spec II is its own executable, built with
+// GT4_TARGET_SPEC2). Each game keeps its own config file and default card, so the two never share paths.
+struct Game {
+  const char *config_file;     // in the config folder
+  const char *elf_name;        // the game executable the donor main loads
+  const char *elf_folder;      // beside the build folders in private/ (find_elf)
+  const char *default_card;    // in the data folder
+  const char *display_name;
+};
+inline constexpr Game kV200Game{"game.ini", "SCUS_973.28.elf", "linux074-ee-producer", "card.ps2", "Gran Turismo 4"};
+inline constexpr Game kSpec2Game{"game-spec2.ini", "SCUS_974.36", "linux074-spec2-elf", "card-spec2.ps2",
+                                 "Gran Turismo 4 Spec II"};
+#ifdef GT4_TARGET_SPEC2
+inline constexpr const Game &kGame = kSpec2Game;
+#else
+inline constexpr const Game &kGame = kV200Game;
+#endif
+
 struct Access {
   std::function<std::optional<std::string>(const std::string &)> environment;  // empty value counts as unset
   std::function<bool(const std::filesystem::path &)> is_file;
@@ -61,9 +80,9 @@ Config parse_config(std::string_view text, const Folders &folders);
 // The defaults of a Linux start (play.sh's fixed settings).
 Environment default_environment(const Folders &folders);
 
-// The ELF when game.ini names none: SCUS_973.28.elf beside the executable, then in ../linux074-ee-producer (the build
-// folders of this checkout live side by side in private/).
-std::optional<std::filesystem::path> find_elf(const Folders &folders, const Access &access);
+// The ELF when the config names none: the game's ELF beside the executable, then in ../<elf_folder> (the build folders of
+// this checkout live side by side in private/).
+std::optional<std::filesystem::path> find_elf(const Folders &folders, const Access &access, const Game &game = kGame);
 
 struct Resolved {
   Environment set;                     // variables to put in the process environment (only those that were unset)
@@ -76,10 +95,10 @@ struct Resolved {
 // User options replace their default (--disc, --memcard, --ntsc/--pal, --window/--fullscreen), `--no-window` leaves the
 // window flag out (headless tests), and every other option is appended unchanged.
 Resolved resolve(const Folders &folders, const std::optional<Config> &config, const std::vector<std::string> &user_arguments,
-                 const Access &access);
+                 const Access &access, const Game &game = kGame);
 
 // The commented game.ini written on the first start when none exists: every key with play.sh's choices, the ELF found
 // by find_elf (else an empty value) and empty disc and memcard lines to fill in.
-std::string template_text(const Folders &folders, const std::optional<std::filesystem::path> &elf);
+std::string template_text(const Folders &folders, const std::optional<std::filesystem::path> &elf, const Game &game = kGame);
 
 } // namespace gt4::linux_start

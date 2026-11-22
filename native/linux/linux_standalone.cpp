@@ -103,19 +103,19 @@ Environment default_environment(const Folders &folders) {
   };
 }
 
-std::optional<std::filesystem::path> find_elf(const Folders &folders, const Access &access) {
+std::optional<std::filesystem::path> find_elf(const Folders &folders, const Access &access, const Game &game) {
   for (const std::filesystem::path &candidate :
-       {folders.executable_dir / "SCUS_973.28.elf",
-        folders.executable_dir.parent_path() / "linux074-ee-producer" / "SCUS_973.28.elf"}) {
+       {folders.executable_dir / game.elf_name,
+        folders.executable_dir.parent_path() / game.elf_folder / game.elf_name}) {
     if (access.is_file && access.is_file(candidate)) return candidate;
   }
   return std::nullopt;
 }
 
 Resolved resolve(const Folders &folders, const std::optional<Config> &config, const std::vector<std::string> &user_arguments,
-                 const Access &access) {
+                 const Access &access, const Game &game) {
   Resolved out;
-  const std::filesystem::path ini = folders.config_dir / standalone::kConfigFileName;
+  const std::filesystem::path ini = folders.config_dir / game.config_file;
 
   // Layers, highest first. A name already set in the process environment, or by a higher layer, is left alone.
   Environment layers;
@@ -137,9 +137,9 @@ Resolved resolve(const Folders &folders, const std::optional<Config> &config, co
   }
 
   // The command line play.sh passes, with the user's options replacing their default.
-  std::optional<std::filesystem::path> elf = config && config->elf ? config->elf : find_elf(folders, access);
+  std::optional<std::filesystem::path> elf = config && config->elf ? config->elf : find_elf(folders, access, game);
   std::optional<std::filesystem::path> disc = config ? config->disc : std::nullopt;
-  std::string card = (config && config->memcard ? *config->memcard : folders.data_dir / "card.ps2").string();
+  std::string card = (config && config->memcard ? *config->memcard : folders.data_dir / game.default_card).string();
   std::string region = "--ntsc", window = "--window";
   std::optional<std::string> disc_argument;
   std::vector<std::string> extra;
@@ -156,15 +156,15 @@ Resolved resolve(const Folders &folders, const std::optional<Config> &config, co
   if (disc_argument) disc = std::filesystem::path(*disc_argument);
 
   if (!elf || !access.is_file || !access.is_file(*elf)) {
-    out.problem = elf ? "The game executable named in game.ini does not exist:\n" + elf->string()
-                      : "No reconstructed game executable (SCUS_973.28.elf) was found beside the game.";
+    out.problem = elf ? "The game executable named in " + std::string(game.config_file) + " does not exist:\n" + elf->string()
+                      : "No game executable (" + std::string(game.elf_name) + ") was found beside the game.";
     out.problem += "\n\nSet elf=<path> in " + ini.string();
     return out;
   }
   if (!disc || !access.is_file(*disc)) {
-    out.problem = disc ? "The disc image named in game.ini does not exist:\n" + disc->string()
+    out.problem = disc ? "The disc image named in " + std::string(game.config_file) + " does not exist:\n" + disc->string()
                        : std::string("No disc image is chosen yet.");
-    out.problem += "\n\nSet disc=<path to your GT4 disc image> in " + ini.string();
+    out.problem += "\n\nSet disc=<path to your " + std::string(game.display_name) + " disc image> in " + ini.string();
     return out;
   }
   out.arguments = {elf->string(), region, "--disc", disc->string(), "--memcard", card};
@@ -173,9 +173,9 @@ Resolved resolve(const Folders &folders, const std::optional<Config> &config, co
   return out;
 }
 
-std::string template_text(const Folders &folders, const std::optional<std::filesystem::path> &elf) {
-  std::string text =
-      "# GT4Recomp on Linux: the settings of a direct start (start gt4_linux_window without arguments).\n"
+std::string template_text(const Folders &folders, const std::optional<std::filesystem::path> &elf, const Game &game) {
+  std::string text = "# GT4Recomp on Linux, " + std::string(game.display_name) +
+      ": the settings of a direct start (start gt4_linux_window without arguments).\n"
       "# key=value lines; '#' starts a comment. A variable set in the environment (GT4_*) or an option on the\n"
       "# command line (--disc, --memcard, --fullscreen, ...) wins over this file. Paths may start with ~/.\n"
       "version=1\n"
@@ -183,7 +183,8 @@ std::string template_text(const Folders &folders, const std::optional<std::files
       "# The game files. disc must be set before the first start.\n";
   text += "elf=" + (elf ? elf->string() : std::string()) + "\n";
   text += "disc=\n";
-  text += "# The memory card; a missing file starts as a new card the game offers to format. Default: " + (folders.data_dir / "card.ps2").string() + "\n";
+  text += "# The memory card; a missing file starts as a new card the game offers to format. Default: " +
+          (folders.data_dir / game.default_card).string() + "\n";
   text += "memcard=\n";
   text +=
       "\n"

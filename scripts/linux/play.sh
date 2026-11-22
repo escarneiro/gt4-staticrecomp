@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
-# TASK-074: start the Linux build of GT4 v2.00 with the settings the Windows launcher passes by default
+# TASK-074: start the Linux build of GT4 v2.00 (or Spec II) with the settings the Windows launcher passes by default
 # (launcher/crates/gt4l-core/src/launch.rs: add_common and coregs20_environment), until a Linux launcher exists.
 #
 # Usage: scripts/linux/play.sh <disc image> <memory card file> [game arguments...]
 #
 # Environment (each optional):
-#   GT4_LINUX_BUILD     build folder holding gt4_linux_window (default: private/linux074-pgo-build, the PGO and
-#                       ThinLTO build of scripts/linux/pgo-build.sh, else private/linux074-release-build)
-#   GT4_LINUX_ELF       the reconstructed game executable (default: private/linux074-ee-producer/SCUS_973.28.elf)
+#   GT4_LINUX_GAME      gt4 (default: GT4 v2.00) or spec2 (Spec II, docs/linux/L2-SPEC2.md)
+#   GT4_LINUX_BUILD     build folder holding gt4_linux_window (default: the game's PGO and ThinLTO build of
+#                       scripts/linux/pgo-build.sh, else its plain build: private/linux074-pgo-build or
+#                       linux074-release-build for gt4, private/linux074-spec2-pgo-build or linux074-spec2-build for spec2)
+#   GT4_LINUX_ELF       the game executable (default: private/linux074-ee-producer/SCUS_973.28.elf for gt4,
+#                       private/linux074-spec2-elf/SCUS_974.36 for spec2)
 #   GT4_LINUX_RENDERER  coregs2 (default) or coregs1 (the native Vulkan backend)
 #   GT4_HW_SCALE        CoreGS 2.0 internal resolution multiplier, 1..12 (default 3)
 #   GT4_LINUX_FXAA      1 (default) or 0
@@ -25,9 +28,16 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 disc=$1
 card=$2
 shift 2
-build=${GT4_LINUX_BUILD:-$root/private/linux074-pgo-build}
-[[ -n ${GT4_LINUX_BUILD:-} || -x $build/gt4_linux_window ]] || build=$root/private/linux074-release-build
-elf=${GT4_LINUX_ELF:-$root/private/linux074-ee-producer/SCUS_973.28.elf}
+case ${GT4_LINUX_GAME:-gt4} in
+    gt4)   optimised=linux074-pgo-build; plain=linux074-release-build
+           default_elf=$root/private/linux074-ee-producer/SCUS_973.28.elf ;;
+    spec2) optimised=linux074-spec2-pgo-build; plain=linux074-spec2-build
+           default_elf=$root/private/linux074-spec2-elf/SCUS_974.36 ;;
+    *)     echo "GT4_LINUX_GAME must be gt4 or spec2" >&2; exit 2 ;;
+esac
+build=${GT4_LINUX_BUILD:-$root/private/$optimised}
+[[ -n ${GT4_LINUX_BUILD:-} || -x $build/gt4_linux_window ]] || build=$root/private/$plain
+elf=${GT4_LINUX_ELF:-$default_elf}
 
 # The launcher's fixed settings: races at 480p, the game's own 16:9, the display aspect from the window, fifo.
 export GT4_FORCE_480P=${GT4_FORCE_480P:-1}

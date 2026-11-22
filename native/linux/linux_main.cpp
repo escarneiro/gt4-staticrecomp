@@ -71,9 +71,11 @@ int prepare_direct_start(int argc, char **argv, std::vector<std::string> &argume
   std::error_code error;
   const std::filesystem::path executable = std::filesystem::read_symlink("/proc/self/exe", error);
   const auto folders = start::find_folders(executable.parent_path(), access);
-  if (!folders) return refuse_start("Neither HOME nor XDG_CONFIG_HOME is set: the game cannot find game.ini.", window);
+  if (!folders)
+    return refuse_start("Neither HOME nor XDG_CONFIG_HOME is set: the game cannot find " + std::string(start::kGame.config_file) +
+                        ".", window);
 
-  const std::filesystem::path ini = folders->config_dir / gt4::standalone::kConfigFileName;
+  const std::filesystem::path ini = folders->config_dir / start::kGame.config_file;
   std::optional<start::Config> config;
   if (std::ifstream in{ini}) {
     std::stringstream text;
