@@ -655,6 +655,33 @@ if(GT4_LINUX_PORT_DIR OR GT4_LINUX_SHADER_DIR)
         message(STATUS "Linux memory card capsule: equals the slice408 pin (atomic card writes, flush at exit)")
     endif()
 
+    # TASK-027 IN-490 on Linux: the IPU capsule of scripts/prepare_ipu_fast.py, as GT4_IPU_RUNTIME_SOURCE in
+    # native/CMakeLists.txt. Its ipu/ipu.cpp decodes the game's videos (behind the menus) with the bit reader, inverse DCT
+    # and colour conversion of native/ipu_fast.hpp, exactly the donor's results. The receipt (runtime.json) must equal the
+    # release pin (ipu_capsule_sha256) and pins ipu.cpp.
+    set(GT4_LINUX_IPU_RUNTIME "" CACHE PATH "prepare_ipu_fast.py capsule (ipu.cpp, runtime.json)")
+    if(GT4_LINUX_IPU_RUNTIME)
+        if(NOT EXISTS "${GT4_LINUX_IPU_RUNTIME}/ipu.cpp" OR NOT EXISTS "${GT4_LINUX_IPU_RUNTIME}/runtime.json")
+            message(FATAL_ERROR "GT4_LINUX_IPU_RUNTIME needs ipu.cpp and runtime.json; derive it with prepare_ipu_fast.py")
+        endif()
+        file(READ "${gt4_release_manifest_file}" gt4_ipu_release)
+        string(JSON gt4_ipu_pinned_receipt GET "${gt4_ipu_release}" ipu_capsule_sha256)
+        file(SHA256 "${GT4_LINUX_IPU_RUNTIME}/runtime.json" gt4_ipu_receipt_actual)
+        file(READ "${GT4_LINUX_IPU_RUNTIME}/runtime.json" gt4_ipu_receipt)
+        string(JSON gt4_ipu_receipt_sha GET "${gt4_ipu_receipt}" ipu_sha256)
+        file(SHA256 "${GT4_LINUX_IPU_RUNTIME}/ipu.cpp" gt4_ipu_actual)
+        if(NOT gt4_ipu_receipt_actual STREQUAL gt4_ipu_pinned_receipt OR NOT gt4_ipu_actual STREQUAL gt4_ipu_receipt_sha)
+            message(FATAL_ERROR "IPU capsule differs from docs/inputs/${gt4_release_manifest_name} or from its runtime.json")
+        endif()
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GT4_LINUX_IPU_RUNTIME}/ipu.cpp"
+            "${GT4_LINUX_IPU_RUNTIME}/runtime.json")
+        list(REMOVE_ITEM gt4_donor_runtime "${GT4_DONOR}/runtime/src/ipu/ipu.cpp")
+        list(APPEND gt4_donor_runtime "${GT4_LINUX_IPU_RUNTIME}/ipu.cpp")
+        set_source_files_properties("${GT4_LINUX_IPU_RUNTIME}/ipu.cpp" PROPERTIES
+            INCLUDE_DIRECTORIES "${GT4_DONOR}/runtime/src;${GT4_NATIVE}")
+        message(STATUS "Linux IPU capsule: equals the slice408 pin (fast video decoder)")
+    endif()
+
     # TASK-125 on Linux (issue #104, GT Auto bubbles): the SPU2 capsule of scripts/prepare_spu2_runtime.py, as
     # GT4_SPU2_RUNTIME_SOURCE in native/CMakeLists.txt. Its iop/spu2.cpp takes the exponential envelope decrease from
     # native/spu2_envelope.hpp, so a released voice reaches silence and is turned off instead of playing on at a low level.

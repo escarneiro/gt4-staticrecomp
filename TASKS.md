@@ -1659,6 +1659,12 @@ silence, issue #104) in the Linux game for both games (`GT4_LINUX_SPU2_RUNTIME`,
 CTest 271/271 in both plain builds; sound at start with 0 underruns. Not yet: the tester hearing the GT Auto bubbles stop;
 the PGO builds. Details: [docs/linux/L2-SPU2.md](docs/linux/L2-SPU2.md).
 
+Progress (2026-11-23, same branch, IPU): the release's fast IPU decoder capsule (slice365, IN-490) in the Linux game for
+both games (`GT4_LINUX_IPU_RUNTIME`, receipt equal to the slice408 pins). v2.00 intro, 3,000 frames headless: 120/120
+frames and the IPU counters identical to the donor decoder, 9.8 s -> 7.4 s. CTest 271/271 in both plain builds. With it
+every release capsule is on Linux. Not yet: the tester watching the videos; the PGO builds. Details:
+[docs/linux/L2-IPU.md](docs/linux/L2-IPU.md).
+
 ### TASK-018 — Racing wheels
 
 Study (2026-11-04): Luan Antony's wheel, DFP and force feedback roadmap (`docs/studies/WHEEL-FFB-ROADMAP.md`, PR #151, issue
