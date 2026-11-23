@@ -655,6 +655,33 @@ if(GT4_LINUX_PORT_DIR OR GT4_LINUX_SHADER_DIR)
         message(STATUS "Linux memory card capsule: equals the slice408 pin (atomic card writes, flush at exit)")
     endif()
 
+    # TASK-125 on Linux (issue #104, GT Auto bubbles): the SPU2 capsule of scripts/prepare_spu2_runtime.py, as
+    # GT4_SPU2_RUNTIME_SOURCE in native/CMakeLists.txt. Its iop/spu2.cpp takes the exponential envelope decrease from
+    # native/spu2_envelope.hpp, so a released voice reaches silence and is turned off instead of playing on at a low level.
+    # The receipt (runtime.json) must equal the release pin (spu2_capsule_sha256) and pins spu2.cpp.
+    set(GT4_LINUX_SPU2_RUNTIME "" CACHE PATH "prepare_spu2_runtime.py capsule (spu2.cpp, runtime.json)")
+    if(GT4_LINUX_SPU2_RUNTIME)
+        if(NOT EXISTS "${GT4_LINUX_SPU2_RUNTIME}/spu2.cpp" OR NOT EXISTS "${GT4_LINUX_SPU2_RUNTIME}/runtime.json")
+            message(FATAL_ERROR "GT4_LINUX_SPU2_RUNTIME needs spu2.cpp and runtime.json; derive it with prepare_spu2_runtime.py")
+        endif()
+        file(READ "${gt4_release_manifest_file}" gt4_spu2_release)
+        string(JSON gt4_spu2_pinned_receipt GET "${gt4_spu2_release}" spu2_capsule_sha256)
+        file(SHA256 "${GT4_LINUX_SPU2_RUNTIME}/runtime.json" gt4_spu2_receipt_actual)
+        file(READ "${GT4_LINUX_SPU2_RUNTIME}/runtime.json" gt4_spu2_receipt)
+        string(JSON gt4_spu2_receipt_sha GET "${gt4_spu2_receipt}" spu2_sha256)
+        file(SHA256 "${GT4_LINUX_SPU2_RUNTIME}/spu2.cpp" gt4_spu2_actual)
+        if(NOT gt4_spu2_receipt_actual STREQUAL gt4_spu2_pinned_receipt OR NOT gt4_spu2_actual STREQUAL gt4_spu2_receipt_sha)
+            message(FATAL_ERROR "SPU2 capsule differs from docs/inputs/${gt4_release_manifest_name} or from its runtime.json")
+        endif()
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GT4_LINUX_SPU2_RUNTIME}/spu2.cpp"
+            "${GT4_LINUX_SPU2_RUNTIME}/runtime.json")
+        list(REMOVE_ITEM gt4_donor_runtime "${GT4_DONOR}/runtime/src/iop/spu2.cpp")
+        list(APPEND gt4_donor_runtime "${GT4_LINUX_SPU2_RUNTIME}/spu2.cpp")
+        set_source_files_properties("${GT4_LINUX_SPU2_RUNTIME}/spu2.cpp" PROPERTIES
+            INCLUDE_DIRECTORIES "${GT4_DONOR}/runtime/src/iop;${GT4_NATIVE}")
+        message(STATUS "Linux SPU2 capsule: equals the slice408 pin (envelope decrease reaches silence)")
+    endif()
+
     add_library(gt4_ps2runtime_vulkan STATIC ${gt4_donor_runtime} "${GT4_LINUX_PORT_DIR}/gs.cpp"
         "${GT4_LINUX_PORT_DIR}/gpu.cpp" "${GT4_NATIVE}/native_vulkan.cpp")
     # TASK-134 fast headers, on by default as in native/CMakeLists.txt: the donor's runtime headers with exact faster forms

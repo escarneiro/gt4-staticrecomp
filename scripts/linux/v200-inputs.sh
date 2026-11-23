@@ -14,6 +14,7 @@
 #                                                                                              pin slice376-frame-render-license-guard-runtime.json
 #     <prefix>-usb-runtime           prepare_usb_runtime.py (GT4_LINUX_USB_RUNTIME)            pin slice409-usb-runtime.json
 #     <prefix>-memcard-runtime       prepare_memcard_flush.py (GT4_LINUX_MEMCARD_RUNTIME)      pin slice408-pcsx2.json
+#     <prefix>-spu2-runtime          prepare_spu2_runtime.py (GT4_LINUX_SPU2_RUNTIME, both games) pin slice408-pcsx2.json
 #     <prefix>-aspect                the TASK-080 patched ELF and its translation (pinned seeds)
 #     <prefix>-release-units         camera360_units.py v200 output (GT4_LINUX_GAME_UNITS)     pin slice408-pcsx2.json
 #
@@ -32,7 +33,7 @@ translator=$out-ee-producer/tool-build/eerecomp
 vu_recomp=${GT4_LINUX_VU_RECOMP:-$out-frameskip-build/gt4_vu_recomp}
 for tool in "$py" "$translator" "$vu_recomp"; do [[ -x $tool ]] || { echo "missing $tool" >&2; exit 2; }; done
 [[ -f $elf ]] || { echo "missing $elf (run tools/ee_producer/build_linux.sh first)" >&2; exit 2; }
-folders="vu1-image vu1-gen vu0-image vu0-gen frame-cost-runtime port-hw frameskip-guard-runtime usb-runtime memcard-runtime aspect release-units"
+folders="vu1-image vu1-gen vu0-image vu0-gen frame-cost-runtime port-hw frameskip-guard-runtime usb-runtime memcard-runtime spu2-runtime aspect release-units"
 for folder in $folders; do
     [[ ! -e $out-$folder ]] || { echo "$out-$folder exists; choose a new prefix" >&2; exit 2; }
 done
@@ -78,6 +79,8 @@ for index in 0 1; do
 done
 $py scripts/prepare_memcard_flush.py "$out-memcard-runtime" > /dev/null
 same "memcard sio2.cpp" "$(hash "$out-memcard-runtime/sio2.cpp")" "$(pin slice408-pcsx2.json memcard_capsule_sha256/sio2.cpp)"
+$py scripts/prepare_spu2_runtime.py "$out-spu2-runtime" > /dev/null
+same "SPU2 receipt" "$(hash "$out-spu2-runtime/runtime.json")" "$(pin slice408-pcsx2.json spu2_capsule_sha256)"
 
 # 3. The release units: the aspect-patched ELF translated with the pinned seeds, then the hook sites (L2-PATCHES.md).
 $py -I - "$elf" "$out-aspect" "$translator" <<'EOF'

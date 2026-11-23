@@ -1654,6 +1654,11 @@ folder fsync on Linux) and the pending save written at exit, with and without a 
 `spec2-inputs.sh`). CTest 271/271 in both plain builds. Not yet: a save made by the tester, the PGO builds (new training
 needed). Details: [docs/linux/L2-MEMCARD.md](docs/linux/L2-MEMCARD.md).
 
+Progress (2026-11-23, same branch, SPU2): the release's SPU2 capsule (slice396, TASK-125: the envelope decrease reaches
+silence, issue #104) in the Linux game for both games (`GT4_LINUX_SPU2_RUNTIME`, receipt equal to the slice408 pins).
+CTest 271/271 in both plain builds; sound at start with 0 underruns. Not yet: the tester hearing the GT Auto bubbles stop;
+the PGO builds. Details: [docs/linux/L2-SPU2.md](docs/linux/L2-SPU2.md).
+
 ### TASK-018 — Racing wheels
 
 Study (2026-11-04): Luan Antony's wheel, DFP and force feedback roadmap (`docs/studies/WHEEL-FFB-ROADMAP.md`, PR #151, issue
