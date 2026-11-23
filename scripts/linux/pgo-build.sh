@@ -89,7 +89,7 @@ optimize)
     rm -rf "$use"
     configure_and_build "$use" -DGT4_LINUX_PGO=use "-DGT4_LINUX_PGO_PROFILE=$profiles/game.profdata" -DGT4_LINUX_THINLTO=ON
     ( cd "$use" && sha256sum gt4_linux_window "$profiles/game.profdata" | tee receipt.txt )
-    echo "play it with: GT4_LINUX_BUILD=$use scripts/linux/play.sh <disc> <card>"
+    echo "play it with: GT4_LINUX_GAME=${GT4_LINUX_GAME:-gt4} scripts/linux/play.sh <disc> <card> (uses $use)"
     ;;
 *)
     echo "usage: $0 instrument | train <disc> <card> [game arguments...] | optimize" >&2

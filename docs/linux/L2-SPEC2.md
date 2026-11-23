@@ -71,6 +71,9 @@ GT4_LINUX_GAME=spec2 scripts/linux/pgo-build.sh optimize
 | `native_linux_standalone` in both builds | v2.00 and Spec II tables, each build picks its own | Confirmed |
 | Headless boot, native backend, BUILD.md press schedule, new card, 9,600 frames | no halt, no missing code; the DNAS310 IOP reboot selects the asynchronous FILEIO server (`LOADFILE 3100`); frames: language, card dialogs, intro movie, Spec II title, Arcade Mode Selection | Confirmed |
 | Headless run to a race screen, 21,000 frames | City Courses, Costa di Amalfi, car selection, Driving Options, 3D pre-race screen; camera 360, FoV and trigger range report Spec II addresses; first `RaceDisplay::render` at VBlank 19,083 | Confirmed |
-| A race played on Linux | not yet (tester) | Unknown |
+| Played on Linux | tester (2026-11-22): tested and trained the PGO profile on the instrumented build; no problem reported | Confirmed (tester) |
+| PGO + ThinLTO build (one played training session) | `private/linux074-spec2-pgo-build`, exe `cd4179e7...`, profile `db2fc4d1...`, built in 3 min 47 s | Confirmed |
+| Headless boot to Arcade, 9,600 frames, CoreGS 2.0 at 1x, warm shader cache, interleaved 3+3 | plain 19.48-19.58 s, PGO 14.99-15.05 s: **-23% wall time**; the same 47,186,042,123 EE cycles in every run | Confirmed (this scene) |
+| Frames, native backend, every 300th of 9,600 | **32 of 32 byte-identical** to the plain build (30 distinct images) | Confirmed |
 
 Not on Linux yet for either target: see [L2-PERFORMANCE](L2-PERFORMANCE.md) "Not yet on Linux".
