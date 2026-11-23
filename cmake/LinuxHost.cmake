@@ -628,6 +628,33 @@ if(GT4_LINUX_PORT_DIR OR GT4_LINUX_SHADER_DIR)
         message(STATUS "Linux USB capsule: equals the slice409 pins (virtual Driving Force Pro)")
     endif()
 
+    # TASK-058 on Linux (crash-safe saves): the memory card capsule of scripts/prepare_memcard_flush.py, as
+    # GT4_MEMCARD_RUNTIME_SOURCE in native/CMakeLists.txt. Its iop/sio2.cpp writes the card through native/memcard_store.cpp
+    # (a temporary file, flushed to disk, then renamed over the card) instead of rewriting the card in place, and the game
+    # host writes a pending save at exit (GT4_MEMCARD_FLUSH_OVERLAY). sio2.cpp must equal its receipt and the slice408 pin.
+    set(GT4_LINUX_MEMCARD_RUNTIME "" CACHE PATH "prepare_memcard_flush.py capsule (sio2.cpp, runtime.json)")
+    set(gt4_linux_memcard_flush OFF)
+    if(GT4_LINUX_MEMCARD_RUNTIME)
+        if(NOT EXISTS "${GT4_LINUX_MEMCARD_RUNTIME}/sio2.cpp" OR NOT EXISTS "${GT4_LINUX_MEMCARD_RUNTIME}/runtime.json")
+            message(FATAL_ERROR "GT4_LINUX_MEMCARD_RUNTIME needs sio2.cpp and runtime.json; derive it with prepare_memcard_flush.py")
+        endif()
+        file(READ "${GT4_LINUX_MEMCARD_RUNTIME}/runtime.json" gt4_memcard_receipt)
+        string(JSON gt4_memcard_receipt_sha GET "${gt4_memcard_receipt}" sio2_sha256)
+        file(READ "${gt4_release_manifest_file}" gt4_memcard_release)
+        string(JSON gt4_memcard_pinned_sha GET "${gt4_memcard_release}" memcard_capsule_sha256 sio2.cpp)
+        file(SHA256 "${GT4_LINUX_MEMCARD_RUNTIME}/sio2.cpp" gt4_memcard_actual)
+        if(NOT gt4_memcard_actual STREQUAL gt4_memcard_receipt_sha OR NOT gt4_memcard_actual STREQUAL gt4_memcard_pinned_sha)
+            message(FATAL_ERROR "Memory card sio2.cpp differs from its runtime.json or from docs/inputs/${gt4_release_manifest_name}")
+        endif()
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GT4_LINUX_MEMCARD_RUNTIME}/sio2.cpp")
+        list(REMOVE_ITEM gt4_donor_runtime "${GT4_DONOR}/runtime/src/iop/sio2.cpp")
+        list(APPEND gt4_donor_runtime "${GT4_LINUX_MEMCARD_RUNTIME}/sio2.cpp")
+        set_source_files_properties("${GT4_LINUX_MEMCARD_RUNTIME}/sio2.cpp" PROPERTIES
+            INCLUDE_DIRECTORIES "${GT4_DONOR}/runtime/src/iop;${GT4_NATIVE}")
+        set(gt4_linux_memcard_flush ON)
+        message(STATUS "Linux memory card capsule: equals the slice408 pin (atomic card writes, flush at exit)")
+    endif()
+
     add_library(gt4_ps2runtime_vulkan STATIC ${gt4_donor_runtime} "${GT4_LINUX_PORT_DIR}/gs.cpp"
         "${GT4_LINUX_PORT_DIR}/gpu.cpp" "${GT4_NATIVE}/native_vulkan.cpp")
     # TASK-134 fast headers, on by default as in native/CMakeLists.txt: the donor's runtime headers with exact faster forms
@@ -654,6 +681,9 @@ if(GT4_LINUX_PORT_DIR OR GT4_LINUX_SHADER_DIR)
     endif()
     if(GT4_LINUX_LICENSE_GUARD)
         target_link_libraries(gt4_ps2runtime_vulkan PUBLIC gt4_license_guard gt4_quickfix)
+    endif()
+    if(gt4_linux_memcard_flush)
+        target_link_libraries(gt4_ps2runtime_vulkan PUBLIC gt4_memcard)
     endif()
 
     # TASK-074 game patches: the game library from the release's translated units (the slice217 aspect units with the
@@ -801,6 +831,9 @@ sys.exit(0 if digest == pin else 1)
                 "${GT4_NATIVE}/linux/sdl_window.cpp" "${GT4_NATIVE}/linux/sdl_audio.cpp" "${GT4_NATIVE}/sdl_gamepad.cpp"
                 "${GT4_NATIVE}/frame_clock.cpp")
             target_compile_definitions(gt4_linux_window PRIVATE PS2_WINDOW)
+            if(gt4_linux_memcard_flush)
+                target_compile_definitions(gt4_linux_window PRIVATE GT4_MEMCARD_FLUSH_OVERLAY)
+            endif()
             set_source_files_properties("${GT4_LINUX_PORT_DIR}/main.cpp" PROPERTIES
                 COMPILE_OPTIONS "-include;${GT4_NATIVE}/host_compat.hpp")
             target_compile_options(gt4_linux_window PRIVATE ${GT4_WARNINGS})

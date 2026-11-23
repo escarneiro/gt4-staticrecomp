@@ -7,6 +7,7 @@
 #include <io.h>
 #include <stdio.h>
 #else
+#include <fcntl.h>
 #include <unistd.h>
 #endif
 
@@ -33,6 +34,17 @@ std::FILE *open_file(const std::filesystem::path &path, bool writing) {
   return std::fopen(path.c_str(), writing ? "wb" : "rb");
 #endif
 }
+
+#ifndef _WIN32
+// Best effort: a folder that cannot be opened or synced leaves the rename done, only not yet durable.
+void sync_folder(const std::filesystem::path &path) {
+  const std::filesystem::path folder = path.has_parent_path() ? path.parent_path() : std::filesystem::path(".");
+  const int descriptor = open(folder.c_str(), O_RDONLY | O_DIRECTORY);
+  if (descriptor < 0) return;
+  fsync(descriptor);
+  close(descriptor);
+}
+#endif
 
 bool write_bytes(std::FILE *file, const std::vector<std::uint8_t> &bytes, std::size_t count) {
   return std::fwrite(bytes.data(), 1, count, file) == count;
@@ -63,7 +75,13 @@ bool write_card_atomically(const std::filesystem::path &path,
 
   std::error_code error;
   std::filesystem::rename(temporary, path, error);  // MoveFileExW(REPLACE_EXISTING) on Windows
-  return !error;
+  if (error) return false;
+#ifndef _WIN32
+  // POSIX: the rename is in the folder's own data, which reaches the disk only when the folder is synced; without this a
+  // power loss soon after a save can bring back the previous card (the new one stays whole, as the old one does).
+  sync_folder(path);
+#endif
+  return true;
 }
 
 bool read_card_file(const std::filesystem::path &path, std::vector<std::uint8_t> &bytes) {

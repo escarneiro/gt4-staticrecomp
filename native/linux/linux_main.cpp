@@ -35,6 +35,11 @@
 #include <vector>
 
 int gt4_donor_main(int argc, char **argv);
+#ifdef GT4_MEMCARD_FLUSH_OVERLAY
+namespace ps2::iop::sio2 {
+void flush_cards_now(); // memcard capsule sio2.cpp (scripts/prepare_memcard_flush.py)
+}
+#endif
 
 namespace {
 
@@ -130,5 +135,11 @@ int main(int argc, char **argv) {
   gt4::fov_adjust::configure_from_environment();  // an invalid GT4_FOV_ADJUST stops the start here
   configure_trigger_range();                       // an invalid GT4_TRIGGER_FULL_RANGE stops the start here
   if (!window && !install_input_replay_without_window()) return 1;
-  return gt4_donor_main(argc, argv);
+  const int result = gt4_donor_main(argc, argv);
+#ifdef GT4_MEMCARD_FLUSH_OVERLAY
+  // TASK-058: without a window, a pending save is written when the game returns (the window path flushes in
+  // sdl_window.cpp; on Windows the slice200 port's main.cpp does this).
+  if (!window) ps2::iop::sio2::flush_cards_now();
+#endif
+  return result;
 }

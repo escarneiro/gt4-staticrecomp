@@ -1647,6 +1647,13 @@ CRT/SDK, `scripts/windows-cross/`), every configure.cmd input equal to its pin e
 windowed on CoreGS 2.0. Not a release build and not a Windows test. Details:
 [docs/linux/WINDOWS-CROSS.md](docs/linux/WINDOWS-CROSS.md).
 
+Progress (2026-11-23, same branch, crash-safe saves): the release's memory card capsule (slice200, `prepare_memcard_flush.py`)
+in the Linux game for both games (`GT4_LINUX_MEMCARD_RUNTIME`): atomic card writes (temporary file, fsync, rename, then a
+folder fsync on Linux) and the pending save written at exit, with and without a window. The build inputs, deleted from
+`private/` earlier the same day, derived again equal to their pins (`scripts/linux/v200-inputs.sh`, new, and
+`spec2-inputs.sh`). CTest 271/271 in both plain builds. Not yet: a save made by the tester, the PGO builds (new training
+needed). Details: [docs/linux/L2-MEMCARD.md](docs/linux/L2-MEMCARD.md).
+
 ### TASK-018 — Racing wheels
 
 Study (2026-11-04): Luan Antony's wheel, DFP and force feedback roadmap (`docs/studies/WHEEL-FFB-ROADMAP.md`, PR #151, issue

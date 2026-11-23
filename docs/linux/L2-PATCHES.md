@@ -95,7 +95,7 @@ scripts/linux/play.sh <disc image> <memory card>       # GT4_FULLSCREEN=1, GT4_O
 ## Not yet on Linux
 
 - ~~The frame skip~~: done 2026-11-23, `docs/linux/L2-FRAME-SKIP.md` (the hook needs the slice376 guard capsule).
-- The other release capsules: memory card flush (crash-safe saves, slice200), IPU fast decoder (slice365), SPU2
-  (slice396), USB (racing wheels).
+- The other release capsules: IPU fast decoder (slice365), SPU2 (slice396). Done since: memory card flush
+  (`docs/linux/L2-MEMCARD.md`), USB (racing wheels).
 - The standalone start (`game.ini`), racing wheels, RetroAchievements, the performance HUD, input recording.
 - Spec II (its own units, capsules and executable).

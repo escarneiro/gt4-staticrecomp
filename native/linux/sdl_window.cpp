@@ -378,6 +378,12 @@ void close_all() {
 
 } // namespace
 
+#ifdef GT4_MEMCARD_FLUSH_OVERLAY
+namespace ps2::iop::sio2 {
+void flush_cards_now(); // memcard capsule sio2.cpp (scripts/prepare_memcard_flush.py)
+}
+#endif
+
 bool open_window(bool fullscreen) {
   try {
     g_controls = gt4::controls::load_controls_from_environment();
@@ -528,6 +534,11 @@ int run_window(const std::function<int()> &emulate) {
     close_all();
     throw;
   }
+  // TASK-058, as native/window.cpp: a save made less than 50 VBlanks before the window closed is written now (atomically,
+  // native/memcard_store.cpp). emulate() returns normally after halt(), so this runs on every normal exit.
+#ifdef GT4_MEMCARD_FLUSH_OVERLAY
+  ps2::iop::sio2::flush_cards_now();
+#endif
   ps2::set_audio_sink({});
   ps2::g_options.on_vblank = {};
   report_pacing();
