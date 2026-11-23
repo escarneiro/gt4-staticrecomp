@@ -1629,6 +1629,16 @@ and `GT4_OUTPUT_SIZE` in the window host, `scripts/linux/play.sh` with the launc
 aspect, 480p and 16:9 report active and set the game's values. Not yet: frame skip, the other release capsules.
 Details: [docs/linux/L2-PATCHES.md](docs/linux/L2-PATCHES.md).
 
+Progress (2026-11-23, same branch, frame skip): the launcher's Frame rate setting on Linux. The hook was missing, not
+only the host side: the slice408 pins name the slice262/slice277 guard (no frame skip hook), while the Windows release is
+built with `slice376-frame-render-license-guard-runtime` (`scripts/coregs2_bench/game/configure.cmd`, Confirmed).
+Derived on Linux equal to that capsule (3/3 sources); `LinuxHost.cmake` accepts either guard. `sdl_window.cpp` gives the
+controller its pacing inputs at every VBlank and the pacer its resync and minimum-interval rules, as `window.cpp`;
+`play.sh` `GT4_LINUX_FRAME_RATE=60|30|off`, a new `game.ini` writes `hw_frame_skip_adaptive=1`. Checks: CTest 271/271 in
+the plain build `private/linux074-frameskip-build`; headless, the controller sees every frame and leaves nothing out in
+the menus. Not yet: a race played at 30 and 60 FPS, the PGO build. Details:
+[docs/linux/L2-FRAME-SKIP.md](docs/linux/L2-FRAME-SKIP.md).
+
 ### TASK-018 — Racing wheels
 
 Study (2026-11-04): Luan Antony's wheel, DFP and force feedback roadmap (`docs/studies/WHEEL-FFB-ROADMAP.md`, PR #151, issue

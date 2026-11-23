@@ -10,8 +10,9 @@
 // prints the pacing report. The game patches: GT4_FORCE_480P is held here at every VBlank (the VU1 worker runtime holds
 // it too, as on Windows); the display aspect (GT4_DISPLAY_ASPECT) gets the window size and the race view presentation
 // from here; the rest act from the translated game and the runtime (linux_main.cpp configures them). What it does not
-// have yet (later TASK-074 steps): the frame skip's host side, RetroAchievements, the F7/F8 performance probe sections,
-// input recording and the GS process (gt4-gs). Racing wheels (TASK-018): a wheel.toml with enabled = true drives the
+// have yet (later TASK-074 steps): RetroAchievements, the F7/F8 performance probe sections, input recording and the GS
+// process (gt4-gs). The frame skip (TASK-082, GT4_FRAME_SKIP / GT4_FRAME_SKIP_FORCE) gets its pacing inputs here at every
+// VBlank, as on Windows; its hook is in the guard capsule's dispatch.cpp (slice376 profile, GT4_LINUX_LICENSE_GUARD). Racing wheels (TASK-018): a wheel.toml with enabled = true drives the
 // virtual Driving Force Pro (native/wheel.hpp), as on Windows; the USB capsule (GT4_LINUX_USB_RUNTIME) must be built in.
 
 #include "window.hpp"
@@ -20,6 +21,7 @@
 #include "display_aspect.hpp"
 #include "display_refresh.hpp"
 #include "frame_clock.hpp"
+#include "frame_skip.hpp"
 #include "gpu.hpp"
 #include "gs/gs.hpp"
 #include "keyboard_scancodes.hpp"
@@ -89,6 +91,9 @@ std::unique_ptr<gt4::linux_host::SdlAudioOutput> g_audio;
 gt4::pacing::Diagnostics g_diagnostics;
 gt4::pacing::Counters g_counters_at_report;
 std::int64_t g_last_release = 0;
+std::int64_t g_ee_frame_ticks = 0; // from the last release to this VBlank, before any wait for the pacer
+std::int64_t g_last_gs_wait = 0;
+std::uint64_t g_vblank = 0;
 bool g_report_requested = false;
 
 // GT4_FORCE_480P (slice164): the race display index held at 480p at every VBlank.
@@ -274,10 +279,32 @@ void report_pacing() {
   g_diagnostics.reset();
 }
 
-// The VBlank release, as native/window.cpp release_frame (without its frame skip and latency-shift inputs, which the
-// Linux host does not have yet). Paced: wait for the grid deadline, but at least GT4_PACING_MIN_INTERVAL_US (15700)
-// after the previous release, so time lost in a slow stretch comes back at about 1 ms per frame instead of in a burst;
-// a full period behind, the grid restarts. Audio: the sound device paces instead.
+// TASK-082, as native/window.cpp note_frame_skip_vblank: what the frame skip decides from (the EE's slack against the grid,
+// the GS worker's lateness and cost, the EE's own frame time without its waits for the GS worker), and what the presenter
+// and the pacer get back from it.
+void note_frame_skip_vblank() {
+  if (!gt4::frame_skip::g_enabled)
+    return;
+  gt4::frame_skip::Controller &skip = gt4::frame_skip::controller();
+  const std::int64_t gs_wait = gt4::pacing::ee_gs_wait_us.load(std::memory_order_relaxed);
+  const std::int64_t frequency = g_clock ? static_cast<std::int64_t>(g_clock->frequency()) : 1;
+  const std::int32_t ee_frame =
+      static_cast<std::int32_t>(std::max<std::int64_t>(g_ee_frame_ticks * 1000000 / frequency - (gs_wait - g_last_gs_wait), 0));
+  g_last_gs_wait = gs_wait;
+  skip.note_vblank(g_vblank, gt4::pacing::ee_slack_us, gt4::pacing::gs_late_us.load(std::memory_order_relaxed),
+                   gt4::pacing::gs_cost_us.load(std::memory_order_relaxed), ee_frame);
+  gt4::pacing::frame_skip_engaged.store(skip.gate_open(), std::memory_order_relaxed);
+  gt4::pacing::frame_skip_recent.store(skip.skipping_recently(), std::memory_order_relaxed);
+  if (g_vblank % 600 == 0)
+    gt4::frame_skip::print_report(stderr);
+}
+
+// The VBlank release, as native/window.cpp release_frame (without its latency-shift input, which the Linux host does
+// not have yet). Paced: wait for the grid deadline, but at least GT4_PACING_MIN_INTERVAL_US (15700) after the previous
+// release, so time lost in a slow stretch comes back at about 1 ms per frame instead of in a burst; a full period
+// behind, the grid restarts. With the frame skip engaged (TASK-082/TASK-146) up to 12 periods are owed and paid back,
+// and while frames are being left out the minimum interval is off: the lost time comes back at once. Audio: the sound
+// device paces instead, and the frame skip, without a slack, leaves nothing out.
 void release_frame() {
   if (g_pacing_mode == gt4::pacing::Mode::paced) {
     if (!g_pacer->anchored())
@@ -287,7 +314,14 @@ void release_frame() {
       const std::int64_t microseconds = text != nullptr ? std::atoll(text) : 15700;
       return microseconds * static_cast<std::int64_t>(g_clock->frequency()) / 1000000;
     }();
-    const std::int64_t earliest = g_last_release != 0 ? g_last_release + min_interval : 0;
+    const std::int64_t frequency = static_cast<std::int64_t>(g_clock->frequency());
+    g_ee_frame_ticks = g_last_release != 0 ? g_clock->now() - g_last_release : 0;
+    gt4::pacing::ee_slack_us = static_cast<std::int32_t>(
+        std::clamp<std::int64_t>((g_pacer->deadline() - g_clock->now()) * 1000000 / frequency, -100000, 100000));
+    g_pacer->set_resync_periods(gt4::pacing::frame_skip_engaged.load(std::memory_order_relaxed) ? 12 : 1);
+    const std::int64_t earliest =
+        g_last_release != 0 && !gt4::pacing::frame_skip_recent.load(std::memory_order_relaxed) ? g_last_release + min_interval
+                                                                                                : 0;
     g_clock->wait_until(std::max(g_pacer->deadline(), earliest));
   } else if (g_audio) {
     g_audio->wait_for_room();
@@ -301,6 +335,8 @@ void release_frame() {
 
 void on_vblank() {
   release_frame();
+  ++g_vblank;
+  note_frame_skip_vblank();
   poll_events();
   if (g_force_480p)
     gt4::display::force_race_480p_at_vblank(ps2::g_ram, ps2::kRamSize, g_force_480p_state);
@@ -426,6 +462,14 @@ bool install_input_replay_without_window() {
   if (std::getenv("GT4_INPUT_RECORD") || std::getenv("GT4_INPUT_REPLAY")) {
     std::fprintf(stderr, "[input] input recording and replay are not on Linux yet; game not started\n");
     return false;
+  }
+  // As native/window.cpp: without a window the frame skip still gets its VBlanks (no pacer: it leaves nothing out unless
+  // GT4_FRAME_SKIP_FORCE sets a fixed pattern).
+  if (gt4::frame_skip::g_enabled) {
+    ps2::g_options.on_vblank = [] {
+      ++g_vblank;
+      note_frame_skip_vblank();
+    };
   }
   return true;
 }

@@ -557,7 +557,11 @@ if(GT4_LINUX_PORT_DIR OR GT4_LINUX_SHADER_DIR)
     # --frame-counters, with the license guard overlay of the slice262 capsule, git bc6d3d04): the license demo guard, the
     # race camera aspect hook and the HUD canvas hook (dispatch.cpp), the halt dump (kernel.cpp, with the frame
     # counters) and the FSV trace (cdvdfsv.cpp). Its three sources must equal the slice408 (1.3.0-rc14) pins.
-    set(GT4_LINUX_LICENSE_GUARD "" CACHE PATH "prepare_license_guard.py capsule equal to the release's slice262 guard")
+    # TASK-082 on Linux: or the capsule the release is actually built with (scripts/coregs2_bench/game/configure.cmd,
+    # both games): slice376-frame-render-license-guard-runtime, prepare_license_guard.py --display-aspect --frame-counters
+    # --frame-skip at the current overlays, which adds the frame skip hook (scripts/frame_skip_overlay.inc). The slice408
+    # pins name the slice262/slice277 guard (scripts/pin_release_130.py); without the hook GT4_FRAME_SKIP does nothing.
+    set(GT4_LINUX_LICENSE_GUARD "" CACHE PATH "prepare_license_guard.py capsule equal to the release's guard (slice408 or slice376)")
     if(GT4_LINUX_LICENSE_GUARD)
         file(GLOB gt4_guard_files RELATIVE "${GT4_LINUX_LICENSE_GUARD}" "${GT4_LINUX_LICENSE_GUARD}/*")
         list(SORT gt4_guard_files)
@@ -565,21 +569,36 @@ if(GT4_LINUX_PORT_DIR OR GT4_LINUX_SHADER_DIR)
             message(FATAL_ERROR "GT4_LINUX_LICENSE_GUARD must hold exactly cdvdfsv.cpp, dispatch.cpp, kernel.cpp and runtime.json")
         endif()
         file(READ "${gt4_release_manifest_file}" gt4_guard_manifest)
+        file(READ "${CMAKE_SOURCE_DIR}/docs/inputs/slice376-frame-render-license-guard-runtime.json" gt4_guard_skip_manifest)
+        set(gt4_guard_matches_release ON)
+        set(gt4_guard_matches_skip ON)
         foreach(source IN ITEMS cdvdfsv.cpp dispatch.cpp kernel.cpp)
             string(JSON gt4_guard_expected GET "${gt4_guard_manifest}" license_guard_source_sha256 "${source}")
+            string(JSON gt4_guard_skip_expected GET "${gt4_guard_skip_manifest}" source_sha256 "${source}")
             file(SHA256 "${GT4_LINUX_LICENSE_GUARD}/${source}" gt4_guard_actual)
             if(NOT gt4_guard_actual STREQUAL gt4_guard_expected)
-                message(FATAL_ERROR "License guard ${source} differs from docs/inputs/${gt4_release_manifest_name}")
+                set(gt4_guard_matches_release OFF)
+            endif()
+            if(NOT gt4_guard_actual STREQUAL gt4_guard_skip_expected)
+                set(gt4_guard_matches_skip OFF)
             endif()
             set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GT4_LINUX_LICENSE_GUARD}/${source}")
         endforeach()
+        if(NOT gt4_guard_matches_release AND NOT gt4_guard_matches_skip)
+            message(FATAL_ERROR "License guard differs from docs/inputs/${gt4_release_manifest_name} and from "
+                                "docs/inputs/slice376-frame-render-license-guard-runtime.json")
+        endif()
         list(REMOVE_ITEM gt4_donor_runtime "${GT4_DONOR}/runtime/src/dispatch.cpp" "${GT4_DONOR}/runtime/src/kernel.cpp"
              "${GT4_DONOR}/runtime/src/iop/cdvdfsv.cpp")
         list(APPEND gt4_donor_runtime "${GT4_LINUX_LICENSE_GUARD}/dispatch.cpp" "${GT4_LINUX_LICENSE_GUARD}/kernel.cpp"
              "${GT4_LINUX_LICENSE_GUARD}/cdvdfsv.cpp")
         set_source_files_properties("${GT4_LINUX_LICENSE_GUARD}/cdvdfsv.cpp" PROPERTIES
             INCLUDE_DIRECTORIES "${GT4_DONOR}/runtime/src/iop")
-        message(STATUS "Linux license guard capsule: equals the slice408 pins")
+        if(gt4_guard_matches_skip)
+            message(STATUS "Linux license guard capsule: equals the slice376 capsule (with the frame skip hook)")
+        else()
+            message(STATUS "Linux license guard capsule: equals the slice408 pins (no frame skip hook)")
+        endif()
     endif()
 
     # TASK-018 on Linux (native DFP wheel): the USB capsule of scripts/prepare_usb_runtime.py, as GT4_USB_RUNTIME_SOURCE in

@@ -14,6 +14,8 @@
 #   GT4_LINUX_RENDERER  coregs2 (default) or coregs1 (the native Vulkan backend)
 #   GT4_HW_SCALE        CoreGS 2.0 internal resolution multiplier, 1..12 (default 3)
 #   GT4_LINUX_FXAA      1 (default) or 0
+#   GT4_LINUX_FRAME_RATE  CoreGS 2.0 races: 60 (default, frames left out only when behind), 30 or off; the frame skip
+#                       needs a build with the slice376 guard capsule (docs/linux/L2-FRAME-SKIP.md)
 #   GT4_WHEEL_FILE      a wheel.toml with enabled = true: the racing wheel drives the virtual Driving Force Pro
 #                       (docs/WHEEL-NATIVE-DFP.md; the build needs -DGT4_LINUX_USB_RUNTIME)
 # Any other GT4_* variable already set (GT4_FULLSCREEN=1, GT4_OUTPUT_SIZE=2560x1080, GT4_PRESENT_MODE=mailbox,
@@ -50,6 +52,14 @@ if [[ ${GT4_LINUX_RENDERER:-coregs2} == coregs2 ]]; then
     export GT4_RENDERER=hw GT4_HW_CORE=2
     export GT4_HW_SCALE=${GT4_HW_SCALE:-3}
     if [[ ${GT4_LINUX_FXAA:-1} == 1 ]]; then export GT4_HW_POSTFX=${GT4_HW_POSTFX:-fxaa}; fi
+    # The launcher's Frame rate (TASK-082/TASK-146): 60 (default) leaves frames out in a race only when the PC falls behind,
+    # 30 draws one frame in two; the game keeps its 60 Hz speed. GT4_LINUX_FRAME_RATE=off draws every frame.
+    case ${GT4_LINUX_FRAME_RATE:-60} in
+        60)  export GT4_FRAME_SKIP=${GT4_FRAME_SKIP:-1} ;;
+        30)  export GT4_FRAME_SKIP_FORCE=${GT4_FRAME_SKIP_FORCE:-2} ;;
+        off) ;;
+        *)   echo "GT4_LINUX_FRAME_RATE must be 60, 30 or off" >&2; exit 2 ;;
+    esac
     export GT4_HW_SHADER_CACHE=${GT4_HW_SHADER_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/gt4recomp/shaders}
     mkdir -p "$GT4_HW_SHADER_CACHE"
 fi

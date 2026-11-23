@@ -94,8 +94,7 @@ scripts/linux/play.sh <disc image> <memory card>       # GT4_FULLSCREEN=1, GT4_O
 
 ## Not yet on Linux
 
-- The frame skip's host side (TASK-082, the launcher's 30 FPS setting): `native/window.cpp` `note_frame_skip_vblank`
-  and its pacing inputs. `GT4_FRAME_SKIP` is read at start but nothing acts on it yet.
+- ~~The frame skip~~: done 2026-11-23, `docs/linux/L2-FRAME-SKIP.md` (the hook needs the slice376 guard capsule).
 - The other release capsules: memory card flush (crash-safe saves, slice200), IPU fast decoder (slice365), SPU2
   (slice396), USB (racing wheels).
 - The standalone start (`game.ini`), racing wheels, RetroAchievements, the performance HUD, input recording.
