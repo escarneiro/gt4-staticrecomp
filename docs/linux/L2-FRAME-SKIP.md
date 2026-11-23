@@ -47,3 +47,10 @@ capsule (with the hook), and says which at configure time.
   An existing `game.ini` is not rewritten.
 - Both need `GT4_FORCE_480P=1` (play.sh and the direct start set it) and print `[frame-skip] on: ...` at start, then a
   report line every 600 VBlanks. `GT4_FRAME_SKIP_LOG=<csv>` writes one row per frame.
+
+## Builds and checks (2026-11-23)
+
+- Plain `private/linux074-frameskip-build`: CTest 271/271. Spec II's plain build `linux074-spec2-build` uses the same capsule.
+- PGO + ThinLTO with the existing profiles: `private/linux074-pgo-build` (`ac2e93e2...`) and `private/linux074-spec2-pgo-build`
+  (`33c01d78...`). The profile was trained without the hook; only `dispatch.cpp` changed.
+- Tester: races at 30 and 60 FPS on the plain build work as expected.

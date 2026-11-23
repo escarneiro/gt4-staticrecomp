@@ -1636,7 +1636,9 @@ Derived on Linux equal to that capsule (3/3 sources); `LinuxHost.cmake` accepts 
 controller its pacing inputs at every VBlank and the pacer its resync and minimum-interval rules, as `window.cpp`;
 `play.sh` `GT4_LINUX_FRAME_RATE=60|30|off`, a new `game.ini` writes `hw_frame_skip_adaptive=1`. Checks: CTest 271/271 in
 the plain build `private/linux074-frameskip-build`; headless, the controller sees every frame and leaves nothing out in
-the menus. Not yet: a race played at 30 and 60 FPS, the PGO build. Details:
+the menus. Tester (2026-11-23, plain build): races at 30 and 60 FPS work as expected. PGO + ThinLTO rebuilt for both games with the new guard and the existing
+profiles (`private/linux074-pgo-build` exe `ac2e93e2...`, `linux074-spec2-pgo-build` exe `33c01d78...`); both start the frame
+skip and count one frame per VBlank headless. Details:
 [docs/linux/L2-FRAME-SKIP.md](docs/linux/L2-FRAME-SKIP.md).
 
 ### TASK-018 — Racing wheels
