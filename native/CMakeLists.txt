@@ -85,7 +85,19 @@ if(GT4_PERF_RUNTIME_SOURCE)
         message(FATAL_ERROR "Performance adapter/shaders must use a qualified 143 or 152 path")
     endif()
 endif()
-set(VULKAN_HEADERS "${GT4_ASSETS_ROOT}/private/tooling/pcsx2-slice101-source/3rdparty/vulkan/include")
+# The Khronos Vulkan headers. GT4_VULKAN_HEADERS overrides the folder (the Linux cross test build, TASK-074, passes the
+# system headers); the default is unchanged.
+set(GT4_VULKAN_HEADERS "${GT4_ASSETS_ROOT}/private/tooling/pcsx2-slice101-source/3rdparty/vulkan/include" CACHE PATH
+    "Khronos Vulkan headers for the donor-derived backend")
+set(VULKAN_HEADERS "${GT4_VULKAN_HEADERS}")
+# TASK-074 side tool (scripts/windows-cross, docs/linux/WINDOWS-CROSS.md): a Windows test build cross-compiled on Linux, for
+# wine. The slice200 port's main.cpp (TASK-059: --portable-check and the windowless exit flush) was edited by hand and
+# cannot be derived from this repository; with this option the port's main.cpp may instead equal the slice191 pin (the
+# prepare_external_vulkan.py derivation it was edited from). Every other input keeps its pin. Never for a release.
+option(GT4_WINDOWS_CROSS_TEST "Linux cross test build: accept the slice191 port main.cpp" OFF)
+if(GT4_WINDOWS_CROSS_TEST)
+    message(WARNING "GT4_WINDOWS_CROSS_TEST: test build only; the port main.cpp may be the slice191 one (no --portable-check)")
+endif()
 if(GT4_EE_PROFILE STREQUAL "production")
     set(GAME_LIBRARY "${GT4_ASSETS_ROOT}/private/reference-acceleration-study/runtime-build/ps2game.lib")
     set(expected_game_library_hash "c837d13dae027f377aecdb0c39834ede2e9463eabf7f767fda6a3c5a0762de1f")
@@ -718,6 +730,11 @@ if(GT4_PERF_RUNTIME_SOURCE)
             list(APPEND expected_input_files "${input_name}")
             string(JSON input_hash GET "${perf_manifest}" inputs "${directory}" "${input_name}")
             file(SHA256 "${${directory}}/${input_name}" actual_input_hash)
+            if(GT4_WINDOWS_CROSS_TEST AND directory STREQUAL "PORT" AND input_name STREQUAL "main.cpp" AND
+               NOT actual_input_hash STREQUAL input_hash)
+                file(READ "${GT4_ROOT}/docs/inputs/slice191-gs-stream-runtime.json" cross_port_manifest)
+                string(JSON input_hash GET "${cross_port_manifest}" inputs PORT main.cpp)
+            endif()
             if(NOT actual_input_hash STREQUAL input_hash)
                 message(FATAL_ERROR "Performance adapter/shader differs: ${input_name}")
             endif()

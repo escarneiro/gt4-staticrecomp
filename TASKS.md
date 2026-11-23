@@ -1641,6 +1641,12 @@ profiles (`private/linux074-pgo-build` exe `ac2e93e2...`, `linux074-spec2-pgo-bu
 skip and count one frame per VBlank headless. Details:
 [docs/linux/L2-FRAME-SKIP.md](docs/linux/L2-FRAME-SKIP.md).
 
+Progress (2026-11-23, same branch, Windows test build): the Windows game cross-compiled on Linux (clang-cl, lld-link, xwin
+CRT/SDK, `scripts/windows-cross/`), every configure.cmd input equal to its pin except the slice200 port's hand-edited
+`main.cpp` (`GT4_WINDOWS_CROSS_TEST` accepts the slice191 one). `gt4vulkan.exe` compiles and starts under wine, headless and
+windowed on CoreGS 2.0. Not a release build and not a Windows test. Details:
+[docs/linux/WINDOWS-CROSS.md](docs/linux/WINDOWS-CROSS.md).
+
 ### TASK-018 — Racing wheels
 
 Study (2026-11-04): Luan Antony's wheel, DFP and force feedback roadmap (`docs/studies/WHEEL-FFB-ROADMAP.md`, PR #151, issue
