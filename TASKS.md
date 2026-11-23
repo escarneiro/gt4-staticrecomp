@@ -1667,7 +1667,8 @@ every release capsule is on Linux. Not yet: the tester watching the videos; the 
 
 Progress (2026-11-23, same branch, host extras): on Linux the cursor auto-hide (TASK-060), the CoreGS latency shift of the
 pacer grid (IN-521) and input recording and replay (IN-520, F9 ends a recording), as in `window.cpp`. CTest 271/271; a
-replay changes the game and repeats exactly; a windowed recording ends complete. Details:
+replay changes the game and repeats exactly; a windowed recording ends complete. Then the F7/F8/F9 performance report
+(the shared probe, with the pacing section and the `pacing_wait`/`host_vblank` scopes). Details:
 [docs/linux/L2-HOST-EXTRAS.md](docs/linux/L2-HOST-EXTRAS.md).
 
 ### TASK-018 — Racing wheels

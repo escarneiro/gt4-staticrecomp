@@ -10,7 +10,8 @@
 // prints the pacing report. The game patches: GT4_FORCE_480P is held here at every VBlank (the VU1 worker runtime holds
 // it too, as on Windows); the display aspect (GT4_DISPLAY_ASPECT) gets the window size and the race view presentation
 // from here; the rest act from the translated game and the runtime (linux_main.cpp configures them). What it does not
-// have yet (later TASK-074 steps): RetroAchievements, the F7/F8 performance probe sections and the GS process (gt4-gs).
+// have yet (later TASK-074 steps): RetroAchievements and the GS process (gt4-gs). F7/F8/F9 drive the performance
+// report (perf_probe.hpp) as on Windows.
 // Input recording and replay (GT4_INPUT_RECORD, GT4_INPUT_REPLAY) work as on Windows. The cursor hides after 3 s without movement over the picture (GT4_CURSOR_AUTOHIDE), as on Windows. The frame skip (TASK-082, GT4_FRAME_SKIP / GT4_FRAME_SKIP_FORCE) gets its pacing inputs here at every
 // VBlank, as on Windows; its hook is in the guard capsule's dispatch.cpp (slice376 profile, GT4_LINUX_LICENSE_GUARD). Racing wheels (TASK-018): a wheel.toml with enabled = true drives the
 // virtual Driving Force Pro (native/wheel.hpp), as on Windows; the USB capsule (GT4_LINUX_USB_RUNTIME) must be built in.
@@ -32,6 +33,7 @@
 #include "race_display.hpp"
 #include "race_widescreen.hpp"
 #include "pacing.hpp"
+#include "perf_probe.hpp"
 #include "pad_mapping.hpp"
 #include "ps2/system.hpp"
 #include "sdl_gamepad.hpp"
@@ -199,6 +201,8 @@ void toggle_fullscreen() {
     SDL_HideCursor();
 }
 
+gt4::pacing::Counters pacing_counters(); // below, with the pacing report
+
 void poll_events() {
   SDL_Event event;
   while (SDL_PollEvent(&event)) {
@@ -220,8 +224,27 @@ void poll_events() {
           (event.key.scancode == SDL_SCANCODE_F11 ||
            (event.key.scancode == SDL_SCANCODE_RETURN && (event.key.mod & SDL_KMOD_ALT))))
         toggle_fullscreen();
+#ifdef GT4_PERF_PROBE
+      // The Windows F7/F8/F9 of the performance report (perf_probe.hpp, GT4_PERF=1 for the accounting from the start):
+      // F7 starts an interval, F8 reports it (the probe's sections, then the pacing report), F9 pauses or resumes the
+      // accounting. Without the accounting on, F8 prints the pacing report alone, as before.
+      if (!event.key.repeat && event.key.scancode == SDL_SCANCODE_F7) {
+        g_counters_at_report = pacing_counters();
+        g_diagnostics.reset();
+        gt4::perf::Probe::shared().request(gt4::perf::Request::start);
+      }
+      if (!event.key.repeat && event.key.scancode == SDL_SCANCODE_F8) {
+        if (gt4::perf::Probe::shared().enabled())
+          gt4::perf::Probe::shared().request(gt4::perf::Request::report);
+        else
+          g_report_requested = true;
+      }
+      if (!event.key.repeat && event.key.scancode == SDL_SCANCODE_F9)
+        gt4::perf::Probe::shared().request(gt4::perf::Request::toggle);
+#else
       if (!event.key.repeat && event.key.scancode == SDL_SCANCODE_F8)
         g_report_requested = true;
+#endif
       break;
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
       ps2::gs::resize_window(static_cast<std::uint32_t>(event.window.data1),
@@ -355,6 +378,8 @@ void release_frame() {
       const std::int64_t microseconds = text != nullptr ? std::atoll(text) : 15700;
       return microseconds * static_cast<std::int64_t>(g_clock->frequency()) / 1000000;
     }();
+    // As window.cpp: the wait is its own category, so the F8 report separates sleep from work.
+    GT4_PERF_SCOPE(gt4::perf::Category::pacing_wait);
     const std::int64_t frequency = static_cast<std::int64_t>(g_clock->frequency());
     g_ee_frame_ticks = g_last_release != 0 ? g_clock->now() - g_last_release : 0;
     gt4::pacing::ee_slack_us = static_cast<std::int32_t>(
@@ -375,9 +400,13 @@ void release_frame() {
 }
 
 void on_vblank() {
+#ifdef GT4_PERF_PROBE
+  gt4::perf::Probe::shared().frame_boundary({ps2::now(), ps2::primitives_drawn(), ps2::vu1_interpreted_calls()});
+#endif
   release_frame();
   ++g_vblank;
   note_frame_skip_vblank();
+  GT4_PERF_SCOPE(gt4::perf::Category::host_vblank);
   poll_events();
   update_cursor();
   if (g_force_480p)
@@ -611,6 +640,18 @@ int run_window(const std::function<int()> &emulate) {
   // Before the guest runs: an enabled wheel plugs the virtual DFP in before the IOP's USB driver first looks.
   g_wheel = std::make_unique<gt4::wheel::WheelInput>(g_wheel_config);
   ps2::g_options.on_vblank = on_vblank;
+#ifdef GT4_PERF_PROBE
+  // As window.cpp: each F8 (or periodic) probe report ends with the pacing report for the same interval.
+  gt4::perf::Probe::shared().set_report_section([](std::FILE *output) {
+    const gt4::pacing::Counters session = pacing_counters();
+    g_diagnostics.format(output, g_pacing_mode, session.since(g_counters_at_report), session);
+    if (g_force_480p)
+      std::fprintf(output, "[display] GT4_FORCE_480P: race display index writes %llu\n",
+                   static_cast<unsigned long long>(g_force_480p_state.writes));
+    g_counters_at_report = session;
+    g_diagnostics.reset();
+  });
+#endif
   if (g_audio)
     ps2::set_audio_sink([](const std::int16_t *samples, std::size_t frames) { g_audio->push(samples, frames); });
   int result = 1;
@@ -628,6 +669,10 @@ int run_window(const std::function<int()> &emulate) {
   ps2::iop::sio2::flush_cards_now();
 #endif
   g_recorder.finish(g_vblank);
+#ifdef GT4_PERF_PROBE
+  gt4::perf::Probe::shared().set_report_section({});
+  gt4::perf::Probe::shared().finish();
+#endif
   ps2::set_audio_sink({});
   ps2::g_options.on_vblank = {};
   report_pacing();

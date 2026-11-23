@@ -28,10 +28,22 @@ presentation; whether a given Linux driver reports them is not checked here.
   keyboard and pads. Both together, a missing or malformed file, or recording without a window stop the start.
 - Same text format as Windows (`native/input_recording.hpp`), so a recording from either system replays on the other.
 
+## The F7/F8/F9 performance report
+
+The shared probe (`native/perf_probe.hpp`) now runs in the Linux window: a frame boundary at each VBlank, F7 starts an
+interval, F8 reports it, F9 pauses or resumes the accounting (when a recording is running, F9 ends the recording instead,
+as on Windows). Each report ends with the pacing report of the same interval and the 480p hold's write count.
+`GT4_PERF=1` turns the accounting on from the start (periodic reports every 5 s); without it, F8 prints the pacing report
+alone, as before. The pacer's wait and the host's VBlank work are their own categories (`pacing_wait`, `host_vblank`), as
+in `window.cpp`, so `[frame] pacing sleep` separates sleep from work. The report goes to stderr (Windows: the same text;
+the launcher writes it to its session log).
+
 ## Checks (2026-11-23)
 
 - CTest 271/271 (`native_cursor_autohide`, `native_input_recording` and the rest).
 - Replay headless, v2.00, 3,000 frames with Start pressed 7 times: 96 of 120 frames differ from the run without input,
   and two replays give identical frames.
 - A windowed recording ended by Ctrl-C: `# GT4Recomp input recording 1`, `v 1 ...`, `end 671`; it replays.
+- `GT4_PERF=1`, v2.00 title in a window: periodic reports every 5 s with the `[perf]`, `[frame]`, VU AOT, `[pacing]` and
+  `[display]` sections; pacing sleep 15.4 ms and critical path 1.2 ms per frame.
 - Not yet: the tester seeing the cursor hide, recording a real drive with F9, the latency control acting on Linux.
