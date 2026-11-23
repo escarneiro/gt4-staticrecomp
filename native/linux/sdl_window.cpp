@@ -10,19 +10,21 @@
 // prints the pacing report. The game patches: GT4_FORCE_480P is held here at every VBlank (the VU1 worker runtime holds
 // it too, as on Windows); the display aspect (GT4_DISPLAY_ASPECT) gets the window size and the race view presentation
 // from here; the rest act from the translated game and the runtime (linux_main.cpp configures them). What it does not
-// have yet (later TASK-074 steps): RetroAchievements, the F7/F8 performance probe sections, input recording and the GS
-// process (gt4-gs). The frame skip (TASK-082, GT4_FRAME_SKIP / GT4_FRAME_SKIP_FORCE) gets its pacing inputs here at every
+// have yet (later TASK-074 steps): RetroAchievements, the F7/F8 performance probe sections and the GS process (gt4-gs).
+// Input recording and replay (GT4_INPUT_RECORD, GT4_INPUT_REPLAY) work as on Windows. The cursor hides after 3 s without movement over the picture (GT4_CURSOR_AUTOHIDE), as on Windows. The frame skip (TASK-082, GT4_FRAME_SKIP / GT4_FRAME_SKIP_FORCE) gets its pacing inputs here at every
 // VBlank, as on Windows; its hook is in the guard capsule's dispatch.cpp (slice376 profile, GT4_LINUX_LICENSE_GUARD). Racing wheels (TASK-018): a wheel.toml with enabled = true drives the
 // virtual Driving Force Pro (native/wheel.hpp), as on Windows; the USB capsule (GT4_LINUX_USB_RUNTIME) must be built in.
 
 #include "window.hpp"
 
 #include "controls.hpp"
+#include "cursor_autohide.hpp"
 #include "display_aspect.hpp"
 #include "display_refresh.hpp"
 #include "frame_clock.hpp"
 #include "frame_skip.hpp"
 #include "gpu.hpp"
+#include "input_recording.hpp"
 #include "gs/gs.hpp"
 #include "keyboard_scancodes.hpp"
 #include "linux/sdl_audio.hpp"
@@ -95,6 +97,34 @@ std::int64_t g_ee_frame_ticks = 0; // from the last release to this VBlank, befo
 std::int64_t g_last_gs_wait = 0;
 std::uint64_t g_vblank = 0;
 bool g_report_requested = false;
+
+// TASK-060, as native/window.cpp update_cursor: the mouse cursor hidden after 3 s without movement while it is over the
+// game picture (GT4_CURSOR_AUTOHIDE, cursor_autohide.hpp). SDL gives the position relative to the window and the window
+// under the mouse (SDL_GetMouseFocus), which Wayland allows where a screen position is not; SDL_HideCursor acts only over
+// this window, so outside it the cursor is never touched, as on Windows.
+gt4::cursor::AutoHide g_cursor;
+
+// IN-520, as native/window.cpp: GT4_INPUT_RECORD=<file> writes the pad state the game receives at each VBlank (F9 ends
+// the recording and closes the game; closing the window also leaves a complete file); GT4_INPUT_REPLAY=<file> plays one
+// back at the same VBlanks instead of the keyboard and pads, so a bench repeats a real drive however fast it runs.
+gt4::input_recording::Recorder g_recorder;
+std::unique_ptr<gt4::input_recording::Player> g_player;
+
+void update_cursor() {
+  if (!g_cursor.policy().auto_hide)
+    return;
+  float x = 0.0f, y = 0.0f;
+  SDL_GetMouseState(&x, &y);
+  const bool over_picture = SDL_GetMouseFocus() == g_window;
+  const bool was_hidden = g_cursor.hidden();
+  const bool hide = g_cursor.update(static_cast<std::int32_t>(x), static_cast<std::int32_t>(y), SDL_GetTicks(), over_picture);
+  if (hide != was_hidden) {
+    if (hide)
+      SDL_HideCursor();
+    else
+      SDL_ShowCursor();
+  }
+}
 
 // GT4_FORCE_480P (slice164): the race display index held at 480p at every VBlank.
 bool g_force_480p = false;
@@ -175,9 +205,17 @@ void poll_events() {
     switch (event.type) {
     case SDL_EVENT_QUIT:
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+      g_recorder.finish(g_vblank); // the window's X or the desktop's close also leave a complete recording
       ps2::halt("window closed");
       break;
     case SDL_EVENT_KEY_DOWN:
+      if (!event.key.repeat && event.key.scancode == SDL_SCANCODE_F9 && g_recorder.active()) {
+        const std::uint64_t changes = g_recorder.finish(g_vblank);
+        std::fprintf(stderr, "[input] recording ended by F9 at VBlank %llu, %llu changes; closing the game\n",
+                     static_cast<unsigned long long>(g_vblank), static_cast<unsigned long long>(changes));
+        ps2::halt("input recording ended");
+        break;
+      }
       if (!event.key.repeat &&
           (event.key.scancode == SDL_SCANCODE_F11 ||
            (event.key.scancode == SDL_SCANCODE_RETURN && (event.key.mod & SDL_KMOD_ALT))))
@@ -299,16 +337,19 @@ void note_frame_skip_vblank() {
     gt4::frame_skip::print_report(stderr);
 }
 
-// The VBlank release, as native/window.cpp release_frame (without its latency-shift input, which the Linux host does
-// not have yet). Paced: wait for the grid deadline, but at least GT4_PACING_MIN_INTERVAL_US (15700) after the previous
-// release, so time lost in a slow stretch comes back at about 1 ms per frame instead of in a burst; a full period
-// behind, the grid restarts. With the frame skip engaged (TASK-082/TASK-146) up to 12 periods are owed and paid back,
+// The VBlank release, as native/window.cpp release_frame. Paced: wait for the grid deadline, but at least
+// GT4_PACING_MIN_INTERVAL_US (15700) after the previous release, so time lost in a slow stretch comes back at about 1 ms
+// per frame instead of in a burst; a full period behind, the grid restarts. With the frame skip engaged (TASK-082/TASK-146) up to 12 periods are owed and paid back,
 // and while frames are being left out the minimum interval is off: the lost time comes back at once. Audio: the sound
 // device paces instead, and the frame skip, without a slack, leaves nothing out.
 void release_frame() {
   if (g_pacing_mode == gt4::pacing::Mode::paced) {
     if (!g_pacer->anchored())
       g_pacer->anchor(g_clock->now());
+    // IN-521: the display queue control of CoreGS 2.0 (hw_present_latency.hpp, GT4_HW_LATENCY_CONTROL) moves the grid
+    // when frames keep missing the flip; as in window.cpp, the shift is taken once and applied here.
+    if (const std::int32_t shift = gt4::pacing::grid_shift_us.exchange(0, std::memory_order_relaxed))
+      g_pacer->shift(static_cast<std::int64_t>(shift) * static_cast<std::int64_t>(g_clock->frequency()) / 1000000);
     static const std::int64_t min_interval = [] {
       const char *text = std::getenv("GT4_PACING_MIN_INTERVAL_US");
       const std::int64_t microseconds = text != nullptr ? std::atoll(text) : 15700;
@@ -338,10 +379,13 @@ void on_vblank() {
   ++g_vblank;
   note_frame_skip_vblank();
   poll_events();
+  update_cursor();
   if (g_force_480p)
     gt4::display::force_race_480p_at_vblank(ps2::g_ram, ps2::kRamSize, g_force_480p_state);
-  // Scripted presses (--press) drive the pad on their own, as in the headless runner.
-  if (ps2::g_options.presses.empty()) {
+  // A replay drives the pad on its own (IN-520); so do scripted presses (--press), as in the headless runner.
+  if (g_player) {
+    apply_pad(g_player->at(g_vblank));
+  } else if (ps2::g_options.presses.empty()) {
     // The wheel resolves which devices it owns first, so the gamepad path never reads them too.
     if (g_wheel) {
       g_wheel->prepare(SDL_GetKeyboardFocus() == g_window);
@@ -350,7 +394,9 @@ void on_vblank() {
         open_gamepad();
       }
     }
-    apply_pad(read_pad());
+    const gt4::pad::PadState pad = read_pad();
+    apply_pad(pad);
+    g_recorder.vblank(g_vblank, pad);
   }
   update_rumble();
   if (g_audio) {
@@ -384,7 +430,36 @@ void flush_cards_now(); // memcard capsule sio2.cpp (scripts/prepare_memcard_flu
 }
 #endif
 
+// IN-520: opens the recording or the replay; false stops the start, since a bench must not run with half its input.
+bool open_input_files() {
+  const char *record = std::getenv("GT4_INPUT_RECORD");
+  const char *replay = std::getenv("GT4_INPUT_REPLAY");
+  std::string error;
+  if (record != nullptr && replay != nullptr) {
+    std::fprintf(stderr, "[input] GT4_INPUT_RECORD and GT4_INPUT_REPLAY together, game not started\n");
+    return false;
+  }
+  if (record != nullptr && !g_recorder.open(record, error)) {
+    std::fprintf(stderr, "[input] %s, game not started\n", error.c_str());
+    return false;
+  }
+  if (record != nullptr)
+    std::fprintf(stderr, "[input] recording to %s; F9 ends it and closes the game\n", record);
+  if (replay != nullptr) {
+    g_player = std::make_unique<gt4::input_recording::Player>();
+    if (!g_player->load(replay, error)) {
+      std::fprintf(stderr, "[input] %s: %s, game not started\n", replay, error.c_str());
+      return false;
+    }
+    std::fprintf(stderr, "[input] replaying %s: %zu changes up to VBlank %llu\n", replay, g_player->changes(),
+                 static_cast<unsigned long long>(g_player->end()));
+  }
+  return true;
+}
+
 bool open_window(bool fullscreen) {
+  if (!open_input_files())
+    return false;
   try {
     g_controls = gt4::controls::load_controls_from_environment();
   } catch (const std::exception &error) {
@@ -397,10 +472,13 @@ bool open_window(bool fullscreen) {
   try {
     fullscreen = fullscreen || gt4::window_mode::parse_start_fullscreen(std::getenv("GT4_FULLSCREEN"));
     output = gt4::display_aspect::configured_output_size();
+    g_cursor = gt4::cursor::AutoHide(gt4::cursor::parse_policy(std::getenv("GT4_CURSOR_AUTOHIDE")));
   } catch (const std::exception &error) {
     std::fprintf(stderr, "[window] %s, game not started\n", error.what());
     return false;
   }
+  std::fprintf(stderr, "[window] cursor auto-hide %s (GT4_CURSOR_AUTOHIDE; %u ms without movement over the picture)\n",
+               g_cursor.policy().auto_hide ? "on" : "off", g_cursor.policy().hide_delay_ms);
   // A wheel file the parser refuses never stops the game: the error is logged and the game runs without the wheel.
   const gt4::wheel::WheelFileResult wheel_file = gt4::wheel::load_wheel_from_environment();
   g_wheel_config = wheel_file.config;
@@ -465,9 +543,19 @@ bool open_window(bool fullscreen) {
 }
 
 bool install_input_replay_without_window() {
-  if (std::getenv("GT4_INPUT_RECORD") || std::getenv("GT4_INPUT_REPLAY")) {
-    std::fprintf(stderr, "[input] input recording and replay are not on Linux yet; game not started\n");
+  // As native/window.cpp: recording needs the window (its keyboard and pads); a replay runs without one.
+  if (std::getenv("GT4_INPUT_RECORD") != nullptr) {
+    std::fprintf(stderr, "[input] GT4_INPUT_RECORD needs --window, game not started\n");
     return false;
+  }
+  if (std::getenv("GT4_INPUT_REPLAY") != nullptr) {
+    if (!open_input_files())
+      return false;
+    ps2::g_options.on_vblank = [] {
+      apply_pad(g_player->at(++g_vblank));
+      note_frame_skip_vblank();
+    };
+    return true;
   }
   // As native/window.cpp: without a window the frame skip still gets its VBlanks (no pacer: it leaves nothing out unless
   // GT4_FRAME_SKIP_FORCE sets a fixed pattern).
@@ -539,6 +627,7 @@ int run_window(const std::function<int()> &emulate) {
 #ifdef GT4_MEMCARD_FLUSH_OVERLAY
   ps2::iop::sio2::flush_cards_now();
 #endif
+  g_recorder.finish(g_vblank);
   ps2::set_audio_sink({});
   ps2::g_options.on_vblank = {};
   report_pacing();

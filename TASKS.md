@@ -1665,6 +1665,11 @@ frames and the IPU counters identical to the donor decoder, 9.8 s -> 7.4 s. CTes
 every release capsule is on Linux. Not yet: the tester watching the videos; the PGO builds. Details:
 [docs/linux/L2-IPU.md](docs/linux/L2-IPU.md).
 
+Progress (2026-11-23, same branch, host extras): on Linux the cursor auto-hide (TASK-060), the CoreGS latency shift of the
+pacer grid (IN-521) and input recording and replay (IN-520, F9 ends a recording), as in `window.cpp`. CTest 271/271; a
+replay changes the game and repeats exactly; a windowed recording ends complete. Details:
+[docs/linux/L2-HOST-EXTRAS.md](docs/linux/L2-HOST-EXTRAS.md).
+
 ### TASK-018 — Racing wheels
 
 Study (2026-11-04): Luan Antony's wheel, DFP and force feedback roadmap (`docs/studies/WHEEL-FFB-ROADMAP.md`, PR #151, issue
