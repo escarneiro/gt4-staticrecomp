@@ -183,9 +183,14 @@ fn wrong_sizes_and_damaged_superblocks_get_clear_errors() {
     odd.push(0);
     assert!(matches!(Card::from_image(&odd), Err(CardError::Unsupported(_))));
 
-    let mut other_clusters = base.clone();
-    put_u32(&mut other_clusters, 0x30, 16384);
-    expect_corrupt(Card::from_image(&other_clusters));
+    // A header that names fewer clusters than the image, or a size no card has, stays corrupt.
+    let sixteen_mb = synth(16384, 73, 16295, &[game_save(5)]);
+    let mut smaller_header = sixteen_mb.clone();
+    put_u32(&mut smaller_header, 0x30, 8192);
+    expect_corrupt(Card::from_image(&smaller_header));
+    let mut odd_header = base.clone();
+    put_u32(&mut odd_header, 0x30, 12000);
+    expect_corrupt(Card::from_image(&odd_header));
 
     let mut bad_page = base.clone();
     bad_page[0x28..0x2A].copy_from_slice(&1024u16.to_le_bytes());
@@ -254,5 +259,32 @@ fn a_chain_entry_equal_to_the_usable_clusters_is_still_corrupt() {
             Err(CardError::Corrupt(what)) => assert!(what.contains("outside the allocation area"), "{what}"),
             other => panic!("expected a chain error, got {other:?}"),
         }
+    }
+}
+
+/// TASK-074 (a downloaded card, 2026-11-26): an 8 MB image whose superblock names a 16 MB card (16384 clusters, as some
+/// card tools write it) is read as the 8 MB it holds, and its saves import. Anything that really points past the image is
+/// still refused.
+#[test]
+fn an_8_mb_image_with_a_16_mb_header_reads_as_8_mb_and_nothing_past_the_end_is_followed() {
+    let base = synth(8192, 41, 8135, &[game_save(5), replay(2)]);
+    let mut oversized = base.clone();
+    put_u32(&mut oversized, 0x30, 16384);
+    put_u32(&mut oversized, 0x38, 16295); // alloc_end of the 16 MB layout
+    let card = Card::from_image(&oversized).expect("read as the size of its image");
+    assert_eq!(card.oversized_header(), Some(16384));
+    assert_eq!(card.layout().clusters, 8192);
+    assert_eq!(Card::from_image(&base).unwrap().oversized_header(), None, "a consistent card");
+    assert_eq!(names(&card.root().unwrap()), names(&Card::from_image(&base).unwrap().root().unwrap()));
+    let library = Library::open(&scratch("oversized-header"), GT4).unwrap();
+    let report = library.import_card_image(&oversized).unwrap();
+    assert_eq!(report.added, vec!["Save 01".to_string(), "BASCUS-97328R0002".to_string()]);
+
+    // The root directory's chain continued to a cluster that only a 16 MB card has: refused, never read.
+    let mut past_the_end = oversized.clone();
+    put_u32(&mut past_the_end, fat_entry_byte(0), 0x8000_0000 | 9000);
+    match Card::from_image(&past_the_end) {
+        Ok(card) => expect_corrupt(card.root()),
+        Err(error) => assert!(matches!(error, CardError::Corrupt(_)), "{error:?}"),
     }
 }

@@ -265,6 +265,8 @@ impl Node {
 pub struct Card {
     pages: Vec<u8>,
     layout: Layout,
+    /// The cluster count the superblock names when it is larger than the image (see [`Card::oversized_header`]).
+    oversized_header: Option<u32>,
 }
 
 impl fmt::Debug for Card {
@@ -311,11 +313,13 @@ impl Card {
             }
             pages_bytes
         };
-        let mut card = Card { pages: pages_bytes, layout: Layout::EIGHT_MB };
+        let mut card = Card { pages: pages_bytes, layout: Layout::EIGHT_MB, oversized_header: None };
         if !card.superblock_ok() {
             return Err(CardError::NotACard);
         }
-        card.layout = card.superblock_layout()?;
+        let (layout, oversized) = card.superblock_layout()?;
+        card.layout = layout;
+        card.oversized_header = oversized;
         Ok(card)
     }
 
@@ -326,7 +330,7 @@ impl Card {
 
     /// Reads and checks the superblock's layout against the image size. Every value the reader uses later is either
     /// checked here or checked where it is used.
-    fn superblock_layout(&self) -> Result<Layout, CardError> {
+    fn superblock_layout(&self) -> Result<(Layout, Option<u32>), CardError> {
         let image_clusters = (self.pages.len() / PAGE_BYTES / 2) as u32;
         let page_size = self.read_u16(0, SB_PAGE_SIZE);
         if page_size as usize != PAGE_DATA_BYTES {
@@ -336,10 +340,16 @@ impl Card {
         if pages_per_cluster != 2 {
             return Err(CardError::Corrupt(format!("{pages_per_cluster} pages per cluster")));
         }
-        let clusters = self.read_u32(0, SB_CLUSTERS);
-        if clusters != image_clusters {
-            return Err(CardError::Corrupt(format!("superblock names {clusters} clusters, the image holds {image_clusters}")));
+        let named = self.read_u32(0, SB_CLUSTERS);
+        // TASK-074 (a downloaded card, 2026-11-26): some tools write the superblock of a larger card into an 8 MB image
+        // (16384 clusters, alloc_end 16295, spare blocks 2047/2046 in a file of 8192 clusters). Such a card is read as the
+        // size of its image: every chain, directory and FAT cluster is then checked against the image (`usable`, below),
+        // so a save that really lies past the end is still refused. A header smaller than the image is still corrupt.
+        let oversized = named > image_clusters && SUPPORTED_CLUSTERS.contains(&named);
+        if named != image_clusters && !oversized {
+            return Err(CardError::Corrupt(format!("superblock names {named} clusters, the image holds {image_clusters}")));
         }
+        let clusters = image_clusters;
         if !SUPPORTED_CLUSTERS.contains(&clusters) {
             return Err(CardError::Unsupported(format!("{} MB", clusters as u64 * CLUSTER_BYTES as u64 / (1024 * 1024))));
         }
@@ -357,7 +367,13 @@ impl Card {
                 return Err(CardError::Corrupt(format!("FAT cluster {physical} outside the card")));
             }
         }
-        Ok(layout)
+        Ok((layout, oversized.then_some(named)))
+    }
+
+    /// The cluster count the superblock names when it is larger than the image (a header written for a bigger card), the
+    /// card then being read as the size of its image. `None` for a consistent card.
+    pub fn oversized_header(&self) -> Option<u32> {
+        self.oversized_header
     }
 
     /// The image with spare bytes, as PCSX2 and the game write it.
@@ -597,7 +613,7 @@ impl Builder {
     fn new() -> Self {
         let usable = (ALLOC_END - ALLOC_OFFSET) as usize;
         // Erased pages are 0xFF everywhere, spare bytes included (as on the owner's card).
-        let mut card = Card { pages: vec![0xFFu8; IMAGE_WITH_ECC], layout: Layout::EIGHT_MB };
+        let mut card = Card { pages: vec![0xFFu8; IMAGE_WITH_ECC], layout: Layout::EIGHT_MB, oversized_header: None };
         // Superblock as on the owner's card: unused areas 0xFF, backup blocks at the card's end.
         let mut superblock = vec![0u8; PAGE_DATA_BYTES];
         superblock[..MAGIC.len()].copy_from_slice(MAGIC);
