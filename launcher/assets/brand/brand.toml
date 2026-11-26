@@ -54,3 +54,10 @@ description = "Launcher icon: the GT emblem on a white rounded square, 10 sizes"
 size_bytes = 33596
 sha256 = "acaf7c265af22ae9233e64151b408f5fe1d8511e8c3c8768e4f8904159277131"
 licence_note = "Derived (tools/make_brand.py)."
+
+[[asset]]
+path = "launcher.png"
+description = "Launcher icon, 256 px PNG (the Linux window icon, TASK-074)"
+size_bytes = 10843
+sha256 = "ed9287fd9a11c406d704ffd421d933dd77351a1664e18ee4f7aec4562e9bb966"
+licence_note = "Derived (tools/make_brand.py)."

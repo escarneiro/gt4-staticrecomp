@@ -4,7 +4,7 @@ Inputs (already fetched, recorded in brand.toml with URL, date, size and SHA-256
   brand/source/gt4-logo.svg      Commons "Gran Turismo 4 Logo.svg" (wordmark with the GT emblem)
   brand/source/cover-front.jpeg  cover supplied by the project owner (1000x1500 JPEG)
 
-Outputs: logo-gt4.png, emblem-gt.png, cover-front.png, game.ico, launcher.ico, and brand.toml.
+Outputs: logo-gt4.png, emblem-gt.png, cover-front.png, game.ico, launcher.ico, launcher.png, and brand.toml.
 
 Run from the repository root:  python launcher/tools/make_brand.py <dir with resvg_py installed>
 Requires: pip install resvg-py pillow
@@ -87,6 +87,8 @@ def write_launcher_ico(path: Path, logo: Image.Image) -> None:
         canvas.alpha_composite(mark, ((big - mark.width) // 2, (big - mark.height) // 2))
         images.append(canvas.resize((size, size), Image.LANCZOS))
     images[-1].save(path, format="ICO", sizes=[(size, size) for size in ICON_SIZES], append_images=images[:-1])
+    # TASK-074 (Linux): Tauri takes the window icon from a PNG in bundle.icon on Linux; the 256 px frame.
+    images[-1].save(path.with_suffix(".png"), optimize=True)
 
 
 def main() -> int:
@@ -121,6 +123,7 @@ def main() -> int:
         ("cover-front.png", "Converted to PNG (RGB) from source/cover-front.jpeg", None, "Derived."),
         ("game.ico", "Game executable icon: emblem on dark tile, 10 sizes", None, "Derived (tools/make_brand.py)."),
         ("launcher.ico", "Launcher icon: the GT emblem on a white rounded square, 10 sizes", None, "Derived (tools/make_brand.py)."),
+        ("launcher.png", "Launcher icon, 256 px PNG (the Linux window icon, TASK-074)", None, "Derived (tools/make_brand.py)."),
     ]
     for relative, description, url, licence in entries:
         path = BRAND / relative

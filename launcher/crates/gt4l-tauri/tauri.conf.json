@@ -31,7 +31,8 @@
     "publisher": "GT4Recomp contributors",
     "copyright": "Copyright (c) 2026 GT4Recomp contributors. MIT License.",
     "icon": [
-      "../../assets/brand/launcher.ico"
+      "../../assets/brand/launcher.ico",
+      "../../assets/brand/launcher.png"
     ],
     "windows": {
       "webviewInstallMode": {
