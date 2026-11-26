@@ -885,6 +885,10 @@ sys.exit(0 if digest == pin else 1)
                 "${GT4_NATIVE}/linux/sdl_window.cpp" "${GT4_NATIVE}/linux/sdl_audio.cpp" "${GT4_NATIVE}/sdl_gamepad.cpp"
                 "${GT4_NATIVE}/frame_clock.cpp")
             target_compile_definitions(gt4_linux_window PRIVATE PS2_WINDOW)
+            if(TARGET gt4_hw_stream_sink)
+                # TASK-074 L4: `--prepare-shaders` for the launcher, as gt4vulkan on Windows (IN-507).
+                target_compile_definitions(gt4_linux_window PRIVATE GT4_HW_SHADER_PREPARE)
+            endif()
             if(gt4_linux_memcard_flush)
                 target_compile_definitions(gt4_linux_window PRIVATE GT4_MEMCARD_FLUSH_OVERLAY)
             endif()

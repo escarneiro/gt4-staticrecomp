@@ -35,6 +35,12 @@
 #include <vector>
 
 int gt4_donor_main(int argc, char **argv);
+
+#ifdef GT4_HW_SHADER_PREPARE
+namespace gt4::hw {
+int prepare_shaders_main();  // IN-507: hw_gs/hw_gs_prepare.cpp (TASK-074 L4: the launcher runs it before a session)
+}
+#endif
 #ifdef GT4_MEMCARD_FLUSH_OVERLAY
 namespace ps2::iop::sio2 {
 void flush_cards_now(); // memcard capsule sio2.cpp (scripts/prepare_memcard_flush.py)
@@ -113,6 +119,10 @@ int prepare_direct_start(int argc, char **argv, std::vector<std::string> &argume
 } // namespace
 
 int main(int argc, char **argv) {
+#ifdef GT4_HW_SHADER_PREPARE
+  // As native/game_main.cpp: the launcher compiles the CoreGS 2.0 pipelines before the first session.
+  if (argc == 2 && std::strcmp(argv[1], "--prepare-shaders") == 0) return gt4::hw::prepare_shaders_main();
+#endif
   // TASK-074: a start without an ELF argument takes its command line and settings from game.ini.
   std::vector<std::string> direct_arguments;
   std::vector<char *> direct_argv;
