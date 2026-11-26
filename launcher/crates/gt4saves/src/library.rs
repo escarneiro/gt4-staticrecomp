@@ -102,6 +102,9 @@ pub const ACTIVE_FOLDER: &str = "Active";
 pub const ACTIVE_BACKUP_FOLDER: &str = ".backup";
 /// Prefix of an inactive slot folder (`Save 01`, `Save 02`, ...).
 pub const SLOT_PREFIX: &str = "Save ";
+/// Folder inside the saves folder that holds the active save while [`Library::activate_slot`] swaps it with a slot. It only
+/// exists during a swap; [`Library::open_paths`] finishes or undoes a swap that was interrupted.
+pub const SWAP_FOLDER: &str = ".activate-swap";
 /// The display name of a save, kept next to the save's game folder (`<slot>/name.txt`, or `Active/name.txt`).
 /// The folder names do not change when a save is renamed.
 pub const NAME_FILE: &str = "name.txt";
@@ -187,7 +190,34 @@ impl Library {
         for folder in folders {
             fs::create_dir_all(folder)?;
         }
-        Ok(Library { paths: paths.clone(), names })
+        let library = Library { paths: paths.clone(), names };
+        library.recover_interrupted_swap()?;
+        Ok(library)
+    }
+
+    /// TASK-074: a swap of [`Library::activate_slot`] that stopped half way (the launcher was closed or the PC lost power)
+    /// leaves the old active save in [`SWAP_FOLDER`]. When `Active` is empty the swap had not moved the slot's save yet:
+    /// the save goes back to `Active`. Otherwise it is parked in a new slot, so no save is ever lost.
+    fn recover_interrupted_swap(&self) -> Result<(), LibraryError> {
+        let swap = self.saves_dir().join(SWAP_FOLDER);
+        if !swap.is_dir() {
+            return Ok(());
+        }
+        if swap.join(self.names.game_save).is_dir() {
+            let active_save = self.active_dir().join(self.names.game_save);
+            let target = if active_save.is_dir() {
+                let parked = self.saves_dir().join(self.next_slot_name()?);
+                fs::create_dir_all(&parked)?;
+                parked
+            } else {
+                self.active_dir()
+            };
+            fs::rename(swap.join(self.names.game_save), target.join(self.names.game_save))?;
+            move_name_file(&swap, &target)?;
+        }
+        let _ = fs::remove_file(swap.join(NAME_FILE));
+        fs::remove_dir(&swap)?;
+        Ok(())
     }
 
     pub fn paths(&self) -> &LibraryPaths {
@@ -384,7 +414,9 @@ impl Library {
     pub fn rename_save(&self, name: &str, new_name: &str) -> Result<String, LibraryError> {
         let cleaned = clean_name(new_name)?;
         let folder_path = self.save_folder(name).ok_or_else(|| LibraryError::NotFound(name.to_string()))?;
-        if !folder_path.join(self.names.game_save).is_dir() {
+        // TASK-074: the active save may be empty (a new save the game creates at the next Play); its name is kept for it.
+        let empty_active = name == self.names.game_save;
+        if !empty_active && !folder_path.join(self.names.game_save).is_dir() {
             return Err(LibraryError::NotFound(name.to_string()));
         }
         let file = folder_path.join(NAME_FILE);
@@ -448,23 +480,77 @@ impl Library {
 
     /// Makes `slot` the active game save. The current active save (if any) gets a new slot.
     pub fn activate_slot(&self, slot: &str) -> Result<(), LibraryError> {
-        let source = self.saves_dir().join(slot).join(self.names.game_save);
-        if !source.is_dir() {
+        let slot_dir = self.saves_dir().join(slot);
+        let source = slot_dir.join(self.names.game_save);
+        if !slot.starts_with(SLOT_PREFIX) || !source.is_dir() {
             return Err(LibraryError::NotFound(slot.to_string()));
         }
         let target = self.active_dir().join(self.names.game_save);
-        if target.is_dir() {
-            let parked = self.next_slot_name()?;
-            let parked_dir = self.saves_dir().join(&parked);
-            fs::create_dir_all(&parked_dir)?;
-            fs::rename(&target, parked_dir.join(self.names.game_save))?;
-            move_name_file(&self.active_dir(), &parked_dir)?;
+        if !target.is_dir() {
+            // Nothing active (a new save): the slot's save moves in with its name and the slot folder goes away.
+            // A name the empty active save had is dropped with it, as before.
+            self.clear_active_name()?;
+            fs::rename(&source, &target)?;
+            move_name_file(&slot_dir, &self.active_dir())?;
+            fs::remove_dir(&slot_dir)?;
+            return Ok(());
         }
+        // TASK-074: the two saves swap places, so the save that was active takes the chosen slot's folder and the slot
+        // numbers stay as they are. Each save keeps its name. The active save waits in SWAP_FOLDER meanwhile; an
+        // interrupted swap is finished or undone by `open_paths`.
+        let swap = self.saves_dir().join(SWAP_FOLDER);
+        fs::create_dir_all(&swap)?;
+        fs::rename(&target, swap.join(self.names.game_save))?;
+        move_name_file(&self.active_dir(), &swap)?;
         fs::rename(&source, &target)?;
-        // The display name goes with its save; the slot folder is then empty.
-        move_name_file(&self.saves_dir().join(slot), &self.active_dir())?;
-        fs::remove_dir(self.saves_dir().join(slot))?;
+        move_name_file(&slot_dir, &self.active_dir())?;
+        fs::rename(swap.join(self.names.game_save), &source)?;
+        move_name_file(&swap, &slot_dir)?;
+        fs::remove_dir(&swap)?;
         Ok(())
+    }
+
+    /// TASK-074: every save shown by name. Gives each save that has no display name one, once: the active save (even an
+    /// empty one, the save the game creates at the next Play) gets `active_name`, a slot keeps the label it showed (its
+    /// folder name, `Save NN`). A name already taken gets ` (2)`, ` (3)`, ... Returns the names written as (library
+    /// name, display name).
+    pub fn name_unnamed_saves(&self, active_name: &str) -> Result<Vec<(String, String)>, LibraryError> {
+        let mut places = vec![self.names.game_save.to_string()];
+        places.extend(self.slots()?);
+        let mut written = Vec::new();
+        for place in places {
+            if self.display_name(&place).is_none() {
+                let wanted = if place == self.names.game_save { active_name.to_string() } else { place.clone() };
+                let stored = self.name_save_uniquely(&place, &wanted)?;
+                written.push((place, stored));
+            }
+        }
+        Ok(written)
+    }
+
+    /// TASK-074: names the save `place` (`Save NN` or the active save) `wanted`, or `wanted (2)`, `wanted (3)`, ... when
+    /// another save already has that name (letter case ignored). Returns the name stored.
+    pub fn name_save_uniquely(&self, place: &str, wanted: &str) -> Result<String, LibraryError> {
+        let mut others = vec![self.names.game_save.to_string()];
+        others.extend(self.slots()?);
+        let taken: Vec<String> = others
+            .iter()
+            .filter(|other| other.as_str() != place)
+            .filter_map(|other| self.display_name(other))
+            .map(|name| name.to_lowercase())
+            .collect();
+        let base = clean_name(wanted)?;
+        let mut candidate = base.clone();
+        let mut number = 2;
+        while taken.contains(&candidate.to_lowercase()) {
+            // The suffix always fits: the base is cut so that " (N)" stays inside NAME_MAX_CHARS.
+            let suffix = format!(" ({number})");
+            let room = NAME_MAX_CHARS.saturating_sub(suffix.chars().count());
+            let cut: String = base.chars().take(room).collect();
+            candidate = clean_name(&format!("{}{suffix}", cut.trim_end()))?;
+            number += 1;
+        }
+        self.rename_save(place, &candidate)
     }
 
     /// Builds the card image for the next Play: the active game save plus `replays`.

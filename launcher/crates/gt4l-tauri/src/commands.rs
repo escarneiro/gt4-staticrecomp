@@ -1043,8 +1043,23 @@ fn saves_view(state: &AppState) -> Result<LibraryView, String> {
 /// The saves of every game in one list (TASK-101 item 2): each game's saves in slot order, each tagged with its game id.
 fn saves_items(state: &AppState) -> Result<Vec<Item>, String> {
     let mut items = Vec::new();
+    let installed = state.installed_games();
+    let language = state::language_of(state);
     for &game in games::GAMES {
-        for mut item in saves::saves(state.library_of(game))? {
+        // TASK-074: an installed game always shows its saves by name, and the save its next Play uses, even before the
+        // game wrote it (the default save of a new install).
+        let set_up = installed.contains(&game);
+        if set_up {
+            match saves::name_unnamed(state.library_of(game), language) {
+                Ok(written) => {
+                    for (place, name) in written {
+                        state::log(&state.dirs, &format!("saves: {} {place} named \"{name}\"", game.id));
+                    }
+                }
+                Err(message) => state::log_warn(&state.dirs, &format!("saves: {} names not written: {message}", game.id)),
+            }
+        }
+        for mut item in saves::saves_with(state.library_of(game), set_up)? {
             item.game = game.id.to_string();
             items.push(item);
         }
@@ -1197,7 +1212,7 @@ pub fn saves_activate_of(id: String, shared: &Shared) -> Result<LibraryView, Str
         return saves_view(&state);
     }
     saves::activate(library, &name)?;
-    state.saves_status = format!("{} will be used the next time you play.", name);
+    state.saves_status = format!("{} will be used the next time you play.", item.label);
     saves_view(&state)
 }
 

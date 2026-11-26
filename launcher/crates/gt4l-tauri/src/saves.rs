@@ -111,6 +111,8 @@ pub struct Item {
     pub renamed: bool,
     /// The game the item belongs to (`gt4` or `spec2`). Empty for replays, which the page lists per game.
     pub game: String,
+    /// TASK-074: the active save holds no game data yet (a new save the game creates at the next Play).
+    pub empty: bool,
 }
 
 /// The page's item shape (`ui/js/pages/library.js`): `id` is what the page sends back to `saves_activate`,
@@ -120,7 +122,7 @@ impl Serialize for Item {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         let id = if self.game.is_empty() { self.name.clone() } else { format!("{}:{}", self.game, self.name) };
-        let mut row = serializer.serialize_struct("Item", 7)?;
+        let mut row = serializer.serialize_struct("Item", 8)?;
         row.serialize_field("id", &id)?;
         row.serialize_field("slot", &self.name)?;
         row.serialize_field("name", &self.label)?;
@@ -128,6 +130,7 @@ impl Serialize for Item {
         row.serialize_field("modified", &self.modified)?;
         row.serialize_field("renamed", &self.renamed)?;
         row.serialize_field("game", &self.game)?;
+        row.serialize_field("empty", &self.empty)?;
         row.end()
     }
 }
@@ -137,32 +140,64 @@ fn modified_of(folder: &Path) -> String {
     fs::metadata(folder).and_then(|metadata| metadata.modified()).map(gt4saves::iso8601_utc).unwrap_or_default()
 }
 
-/// The active save first, then the inactive slots in slot order.
+/// The saves of a library: the active save and the inactive slots. Without `show_empty_active`, an active save that holds
+/// no game data is left out.
 pub fn saves(library: &Library) -> Result<Vec<Item>, String> {
+    saves_with(library, false)
+}
+
+/// TASK-074: every save of the library by name, in name order (letter case ignored), so a row stays where it is when
+/// another save becomes the one the next Play uses: only `active` moves. With `show_empty_active`, an active save that
+/// holds no game data yet (a new install, or after New save) is a row too (`empty`), the save the game creates.
+pub fn saves_with(library: &Library, show_empty_active: bool) -> Result<Vec<Item>, String> {
     let mut items = Vec::new();
-    if library.active_save().map_err(|error| error.to_string())?.is_some() {
-        let game_save = library.names().game_save;
+    let game_save = library.names().game_save;
+    let has_active = library.active_save().map_err(|error| error.to_string())?.is_some();
+    if has_active || show_empty_active {
         let named = library.display_name(game_save);
         items.push(Item {
             name: game_save.to_string(),
-            renamed: named.is_some(), game: String::new(),
+            renamed: named.is_some(),
+            game: String::new(),
             label: named.unwrap_or_else(|| "Active save".to_string()),
             active: true,
-            modified: modified_of(&library.active_dir().join(game_save)),
+            modified: if has_active { modified_of(&library.active_dir().join(game_save)) } else { String::new() },
+            empty: !has_active,
         });
     }
     for slot in library.slots().map_err(|error| error.to_string())? {
-        let modified = modified_of(&library.slot_dir(&slot).join(library.names().game_save));
+        let modified = modified_of(&library.slot_dir(&slot).join(game_save));
         let named = library.display_name(&slot);
         items.push(Item {
-            renamed: named.is_some(), game: String::new(),
+            renamed: named.is_some(),
+            game: String::new(),
             label: named.unwrap_or_else(|| slot.clone()),
             name: slot,
             active: false,
             modified,
+            empty: false,
         });
     }
+    items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()).then_with(|| a.name.cmp(&b.name)));
     Ok(items)
+}
+
+/// TASK-074: gives every save of a game a name once (`Library::name_unnamed_saves`). An unnamed active save is the default
+/// save, except an empty one (the save the next Play creates) next to other saves, which is a new save. Slots keep the
+/// label they showed (`Save NN`). Returns what was written.
+pub fn name_unnamed(library: &Library, language: Language) -> Result<Vec<(String, String)>, String> {
+    let others = library.slots().map_err(|error| error.to_string())?;
+    let empty_active = library.active_save().map_err(|error| error.to_string())?.is_none();
+    let id = if empty_active && !others.is_empty() { "saves.new_save_name" } else { "saves.default_name" };
+    library.name_unnamed_saves(messages::text(id, language)).map_err(|error| error.to_string())
+}
+
+/// TASK-074: the name an imported save gets: the picked file's name without its extension (`gran-turismo-4.22070.ps2`
+/// gives `gran-turismo-4.22070`; a folder card gives its folder name).
+pub fn import_name(path: &Path) -> Option<String> {
+    let stem = if path.is_dir() { path.file_name() } else { path.file_stem() }?;
+    let text = stem.to_string_lossy().trim().to_string();
+    gt4saves::library::clean_name(&text).ok()
 }
 
 /// Every replay the library keeps, in name order.
@@ -173,7 +208,7 @@ pub fn replays(library: &Library) -> Result<Vec<Item>, String> {
         .into_iter()
         .map(|name| {
             let modified = modified_of(&library.replays_dir().join(&name));
-            Item { label: name.clone(), name, active: false, modified, renamed: false, game: String::new() }
+            Item { label: name.clone(), name, active: false, modified, renamed: false, game: String::new(), empty: false }
         })
         .collect())
 }
@@ -198,6 +233,12 @@ pub fn import_path(libraries: &[(&'static Game, &Library)], path: &Path, languag
             continue;
         }
         let report = library.import_items(&mine).map_err(|error| import_error_text(&error, language))?;
+        // TASK-074: a game save from the file is named after the file; the player can rename it.
+        if let Some(name) = import_name(path) {
+            for added in report.added.iter().filter(|added| added.starts_with(gt4saves::library::SLOT_PREFIX)) {
+                library.name_save_uniquely(added, &name).map_err(|error| error.to_string())?;
+            }
+        }
         outcome.per_game.push((game, report));
     }
     if outcome.per_game.is_empty() {
@@ -604,6 +645,24 @@ mod tests {
     }
 
     #[test]
+    fn unnamed_saves_are_named_by_their_place() {
+        let data = scratch("name-rule");
+        let (_, library) = open_scratch(&data);
+        // A new install: the empty active save is the default save.
+        assert_eq!(name_unnamed(&library, Language::fallback()).unwrap(), vec![(GT4.save_folder.to_string(), "Default save".to_string())]);
+        let fresh = scratch("name-rule-2");
+        let (_, library) = open_scratch(&fresh);
+        let source = fresh.join("career.ps2");
+        fs::write(&source, card_with(&[game_save(3)])).unwrap();
+        import_path(&library, &source, Language::fallback()).unwrap();
+        // Saves exist and nothing is active: the empty active save is a new save; the import kept its file's name.
+        assert_eq!(name_unnamed(&library, Language::fallback()).unwrap(), vec![(GT4.save_folder.to_string(), "New save".to_string())]);
+        assert_eq!(library.display_name("Save 01").as_deref(), Some("career"));
+        let _ = fs::remove_dir_all(&data);
+        let _ = fs::remove_dir_all(&fresh);
+    }
+
+    #[test]
     fn activating_a_slot_parks_the_previous_save() {
         let data = scratch("activate");
         let (_, library) = open_scratch(&data);
@@ -611,18 +670,23 @@ mod tests {
         let source = data.join("source.ps2");
         fs::write(&source, card_with(&[game_save(3)])).unwrap();
         import_path(&library, &source, Language::fallback()).unwrap();
-        // Make the imported save active: the library had no active save, so the slot becomes it.
+        // TASK-074: an imported save is named after its file. The library had no active save, so the slot becomes it.
         activate(&library, "Save 01").unwrap();
         let before = saves(&library).unwrap();
         assert_eq!(names(&before), vec![GT4.save_folder.to_string()]);
-        assert!(before[0].active && before[0].label == "Active save");
+        assert!(before[0].active && before[0].label == "source");
 
         let other = data.join("other.ps2");
         fs::write(&other, card_with(&[game_save(4)])).unwrap();
         import_path(&library, &other, Language::fallback()).unwrap();
+        // The list is in name order and stays so: making "other" active swaps the saves in place (Save 01 is reused),
+        // and only the active mark moves.
+        let labels = |items: &[Item]| items.iter().map(|item| (item.label.clone(), item.active)).collect::<Vec<_>>();
+        assert_eq!(labels(&saves(&library).unwrap()), vec![("other".to_string(), false), ("source".to_string(), true)]);
         activate(&library, "Save 01").unwrap();
+        assert_eq!(labels(&saves(&library).unwrap()), vec![("other".to_string(), true), ("source".to_string(), false)]);
         let after = names(&saves(&library).unwrap());
-        assert_eq!(after, vec![GT4.save_folder.to_string(), "Save 02".to_string()]);
+        assert_eq!(after, vec![GT4.save_folder.to_string(), "Save 01".to_string()], "other (active) first, source in Save 01");
         prepare_card(&library, &runtime_card, Language::fallback()).unwrap();
         let _ = fs::remove_dir_all(&data);
     }
@@ -703,7 +767,7 @@ mod tests {
     }
 
     fn active_item() -> Item {
-        Item { name: GT4.save_folder.into(), label: "Active save".into(), active: true, modified: String::new(), renamed: false, game: String::new() }
+        Item { name: GT4.save_folder.into(), label: "Active save".into(), active: true, modified: String::new(), renamed: false, game: String::new(), empty: false }
     }
 
     // The tests remove the folder instead of sending it to the Recycle Bin.
@@ -961,11 +1025,11 @@ mod page_shape_tests {
 
     #[test]
     fn an_item_has_the_fields_the_page_reads() {
-        let item = Item { name: "Save 02".into(), label: "Save 02".into(), active: false, modified: "2026-10-21T12:00:00Z".into(), renamed: false, game: String::new() };
+        let item = Item { name: "Save 02".into(), label: "Save 02".into(), active: false, modified: "2026-10-21T12:00:00Z".into(), renamed: false, game: String::new(), empty: false };
         let json = serde_json::to_value(&item).unwrap();
         assert_eq!(
             json,
-            serde_json::json!({ "id": "Save 02", "slot": "Save 02", "name": "Save 02", "active": false, "modified": "2026-10-21T12:00:00Z", "renamed": false, "game": "" })
+            serde_json::json!({ "id": "Save 02", "slot": "Save 02", "name": "Save 02", "active": false, "modified": "2026-10-21T12:00:00Z", "renamed": false, "game": "", "empty": false })
         );
         // A save of a game carries the game in its id, so the page's actions reach that game's library.
         let spec2 = Item { game: "spec2".into(), ..item };

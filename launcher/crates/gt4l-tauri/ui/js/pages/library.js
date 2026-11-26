@@ -190,6 +190,9 @@
 
     function removeItem(id) {
       var target = items.filter(function (item) { return item.id === id; })[0];
+      if (target && target.empty) {
+        return; // TASK-074: the save the game creates at the next Play holds nothing to delete yet.
+      }
       // The active save goes to the Recycle Bin too, and the next Play starts a new profile: say so.
       var text = target && target.active && kindName === "saves" ? GT4.t("library.delete_active_save_text") : kind.removeText;
       GT4.ui.openDialog({
@@ -240,11 +243,10 @@
       if (item.active) {
         nameNode.appendChild(h("small", { text: GT4.t("library.next_play") }));
       }
-      if (item.renamed) {
-        nameNode.appendChild(h("span", { class: "slot-id", text: item.slot || item.id }));
-      }
+      // TASK-074: every save is shown by its own name; the folder it sits in (Save NN) is not shown, since it is not the
+      // save's identity (the active save and a slot swap folders). An empty save is the one the game creates at the next Play.
       children.push(nameNode);
-      children.push(h("span", { class: "date", text: GT4.ui.formatDate(item.modified) }));
+      children.push(h("span", { class: "date", text: item.empty ? GT4.t("library.new_game_note") : GT4.ui.formatDate(item.modified) }));
       var actions = [];
       if (kindName === "saves") {
         actions.push(h("button", {
@@ -259,6 +261,9 @@
             }
           }
         }, pencilIcon()));
+      }
+      // TASK-074: an empty save has nothing to export or delete yet.
+      if (kindName === "saves" && !item.empty) {
         actions.push(h("button", {
           class: "iconbtn",
           type: "button",
@@ -272,7 +277,7 @@
           }
         }, exportIcon()));
       }
-      actions.push(h("button", {
+      if (!item.empty) actions.push(h("button", {
         class: "iconbtn del",
         type: "button",
         "aria-label": GT4.t("library.aria_delete", { name: item.name || item.id }),

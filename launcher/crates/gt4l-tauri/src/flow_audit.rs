@@ -967,13 +967,18 @@ fn two_games_install_side_by_side_and_never_mix() {
     synthetic_spec2_card(&card);
     let view = commands::import_into_game(&second, &card, Kind::Saves, &gt4l_core::games::SPEC2).unwrap();
     assert_eq!(view.game, "spec2");
-    assert_eq!(view.items.len(), 1, "{}", view.status);
+    // TASK-074: each installed game also lists the save its next Play creates (empty) until the game has one.
+    let real = |items: &[crate::saves::Item]| items.iter().filter(|item| !item.empty).cloned().collect::<Vec<_>>();
+    assert_eq!(real(&view.items).len(), 1, "{}", view.status);
+    let mut empty_games: Vec<&str> = view.items.iter().filter(|item| item.empty).map(|item| item.game.as_str()).collect();
+    empty_games.sort();
+    assert_eq!(empty_games, ["gt4", "spec2"], "the import goes to a slot; the next Play of each game still makes a new save");
     commands::select_game_of("gt4".into(), &second).unwrap();
     let gt4_view = commands::saves_list_of(&second).unwrap();
     assert_eq!((gt4_view.game.as_str(), gt4_view.game_name.as_str()), ("gt4", "Gran Turismo 4"));
     // One list of both games (TASK-101 item 2): the Spec II save is listed with its game id, and no Gran Turismo 4 one.
-    assert_eq!(gt4_view.items.iter().filter(|item| item.game == "gt4").count(), 0, "no Gran Turismo 4 save yet");
-    assert_eq!(gt4_view.items.iter().filter(|item| item.game == "spec2").count(), 1);
+    assert_eq!(real(&gt4_view.items).iter().filter(|item| item.game == "gt4").count(), 0, "no Gran Turismo 4 save yet");
+    assert_eq!(real(&gt4_view.items).iter().filter(|item| item.game == "spec2").count(), 1);
     assert!(gt4_view.folder.replace('\\', "/").contains("games/gt4/Saves"), "{}", gt4_view.folder);
     // An import goes to the game its save belongs to, whatever page is shown; the status says so (TASK-101 item 1).
     assert_eq!(commands::page_game(None, &gt4l_core::games::GT4).id, "gt4");
@@ -987,8 +992,8 @@ fn two_games_install_side_by_side_and_never_mix() {
     assert!(routed.status.contains("Gran Turismo 4"), "{}", routed.status);
     commands::select_game_of("gt4".into(), &second).unwrap();
     let both = commands::saves_list_of(&second).unwrap().items;
-    assert_eq!(both.iter().filter(|item| item.game == "gt4").count(), 1, "the Gran Turismo 4 save went to its own library");
-    assert_eq!(both.iter().filter(|item| item.game == "spec2").count(), 1, "the Spec II save is still listed");
+    assert_eq!(real(&both).iter().filter(|item| item.game == "gt4").count(), 1, "the Gran Turismo 4 save went to its own library");
+    assert_eq!(real(&both).iter().filter(|item| item.game == "spec2").count(), 1, "the Spec II save is still listed");
 
     // Remove deletes the disc copy and the prepared files of one game, never its saves or the other game.
     let after = commands::games_remove_of("spec2".into(), &second).unwrap();
@@ -997,7 +1002,10 @@ fn two_games_install_side_by_side_and_never_mix() {
     assert!(!data.join("games/spec2/disc").exists() && !data.join("games/spec2/prepared").exists());
     assert!(data.join("games/gt4/prepared/prepare.json").is_file());
     commands::select_game_of("spec2".into(), &second).unwrap();
-    assert_eq!(commands::saves_list_of(&second).unwrap().items.len(), 2, "both games' saves are in the one list");
+    let listed = commands::saves_list_of(&second).unwrap().items;
+    assert_eq!(real(&listed).len(), 2, "both games' saves are in the one list");
+    // A removed game shows no empty save of its own; the installed one still does (TASK-074).
+    assert_eq!(listed.iter().filter(|item| item.empty).map(|item| item.game.as_str()).collect::<Vec<_>>(), ["gt4"]);
     let _ = fs::remove_dir_all(&root);
 }
 
