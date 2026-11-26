@@ -12,7 +12,9 @@
 //!   the default). The PCSX2 GS (`gt4-gs.exe`) renders with the chosen API and the game program creates no Vulkan
 //!   device in that mode, so a Direct3D 12 or 11 run never asks the Vulkan loader. A Vulkan run needs a GPU that
 //!   reports Vulkan 1.2 or newer and the instance extensions `VK_KHR_surface` and `VK_KHR_win32_surface`
-//!   (`native/native_vulkan.cpp`, `native/vulkan_extensions.cpp`); swapchain maintenance 1 is optional (slice214). When
+//!   (`native/native_vulkan.cpp`, `native/vulkan_extensions.cpp`); swapchain maintenance 1 is optional (slice214). On
+//!   Linux (TASK-074) the game needs `VK_KHR_surface` and at least one of `VK_KHR_xlib_surface` and
+//!   `VK_KHR_wayland_surface` (`select_linux_instance_extensions` in `native/vulkan_extensions.cpp`). When
 //!   no such GPU exists, that run plays with Direct3D 11 and the player is told ([`gpu::plan`]). This is decided
 //!   per run, so a driver update brings Vulkan back without a setting change. Setup needs no GPU.
 
@@ -75,6 +77,25 @@ pub const MINIMUM_VULKAN: (u32, u32) = (1, 2);
 /// The instance extensions the game program requires (`native/vulkan_extensions.cpp`). The swapchain-maintenance ones
 /// are optional since slice214.
 pub const GAME_INSTANCE_EXTENSIONS: [&str; 2] = ["VK_KHR_surface", "VK_KHR_win32_surface"];
+
+/// TASK-074 (Linux): the window-system surfaces of the Linux game, of which the loader must offer at least one beside
+/// `VK_KHR_surface` (`select_linux_instance_extensions` in `native/vulkan_extensions.cpp`; SDL3 picks X11 or Wayland).
+pub const LINUX_WINDOW_SURFACES: [&str; 2] = ["VK_KHR_xlib_surface", "VK_KHR_wayland_surface"];
+
+/// How a missing Linux window surface is named in the message (neither of [`LINUX_WINDOW_SURFACES`] is offered).
+pub const LINUX_WINDOW_SURFACE_MISSING: &str = "VK_KHR_xlib_surface or VK_KHR_wayland_surface";
+
+/// The platform whose game program the requirement rules describe.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GamePlatform {
+    Windows,
+    Linux,
+}
+
+impl GamePlatform {
+    /// The platform this launcher was built for.
+    pub const HOST: GamePlatform = if cfg!(windows) { GamePlatform::Windows } else { GamePlatform::Linux };
+}
 
 /// One GPU as the Vulkan loader reports it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -236,7 +257,25 @@ pub fn vulkan_problem_in(probe: &VulkanProbe, language: Language) -> Option<Stri
 
 /// The game's required instance extensions that the loader does not offer.
 pub fn missing_instance_extensions(offered: &[String]) -> Vec<&'static str> {
-    GAME_INSTANCE_EXTENSIONS.iter().copied().filter(|name| !offered.iter().any(|offer| offer == name)).collect()
+    missing_instance_extensions_on(offered, GamePlatform::HOST)
+}
+
+/// [`missing_instance_extensions`] for the game program of `platform`.
+pub fn missing_instance_extensions_on(offered: &[String], platform: GamePlatform) -> Vec<&'static str> {
+    let has = |name: &str| offered.iter().any(|offer| offer == name);
+    match platform {
+        GamePlatform::Windows => GAME_INSTANCE_EXTENSIONS.iter().copied().filter(|name| !has(name)).collect(),
+        GamePlatform::Linux => {
+            let mut missing = Vec::new();
+            if !has("VK_KHR_surface") {
+                missing.push("VK_KHR_surface");
+            }
+            if !LINUX_WINDOW_SURFACES.iter().any(|name| has(name)) {
+                missing.push(LINUX_WINDOW_SURFACE_MISSING);
+            }
+            missing
+        }
+    }
 }
 
 #[cfg(test)]
@@ -324,7 +363,9 @@ mod tests {
     }
 
     fn required_extensions() -> Vec<String> {
-        GAME_INSTANCE_EXTENSIONS.iter().map(|name| name.to_string()).collect()
+        // What this host's game needs: the Windows pair, or the Linux surface with Wayland (TASK-074).
+        let names: &[&str] = if cfg!(windows) { &GAME_INSTANCE_EXTENSIONS } else { &["VK_KHR_surface", "VK_KHR_wayland_surface"] };
+        names.iter().map(|name| name.to_string()).collect()
     }
 
     fn device(name: &str, major: u32, minor: u32) -> VulkanDevice {
@@ -400,10 +441,39 @@ mod tests {
     #[test]
     fn a_loader_without_the_win32_surface_is_refused_by_name() {
         let offered = vec!["VK_KHR_surface".to_string()];
+        assert_eq!(missing_instance_extensions_on(&offered, GamePlatform::Windows), vec!["VK_KHR_win32_surface"]);
+        // The message names what this host's game needs.
         let probe = VulkanProbe::Ready { instance_extensions: offered.clone(), devices: vec![device("GPU", 1, 3)] };
         let message = vulkan_problem(&probe).expect("refused");
-        assert!(message.contains("missing Vulkan VK_KHR_win32_surface"), "{message}");
-        assert_eq!(missing_instance_extensions(&offered), vec!["VK_KHR_win32_surface"]);
+        let expected = if cfg!(windows) { "VK_KHR_win32_surface" } else { LINUX_WINDOW_SURFACE_MISSING };
+        assert!(message.contains(&format!("missing Vulkan {expected}")), "{message}");
+    }
+
+    #[test]
+    fn linux_needs_the_surface_and_one_window_system_surface() {
+        let offer = |names: &[&str]| names.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+        let linux = |names: &[&str]| missing_instance_extensions_on(&offer(names), GamePlatform::Linux);
+        assert!(linux(&["VK_KHR_surface", "VK_KHR_wayland_surface"]).is_empty());
+        assert!(linux(&["VK_KHR_surface", "VK_KHR_xlib_surface"]).is_empty());
+        assert!(linux(&["VK_KHR_surface", "VK_KHR_xlib_surface", "VK_KHR_wayland_surface"]).is_empty());
+        assert_eq!(linux(&["VK_KHR_surface", "VK_KHR_xcb_surface"]), vec![LINUX_WINDOW_SURFACE_MISSING]);
+        assert_eq!(linux(&["VK_KHR_wayland_surface"]), vec!["VK_KHR_surface"]);
+        assert_eq!(linux(&[]), vec!["VK_KHR_surface", LINUX_WINDOW_SURFACE_MISSING]);
+        // A Windows loader is not enough for the Linux game, and the other way round.
+        assert_eq!(linux(&["VK_KHR_surface", "VK_KHR_win32_surface"]), vec![LINUX_WINDOW_SURFACE_MISSING]);
+        let windows = missing_instance_extensions_on(&offer(&["VK_KHR_surface", "VK_KHR_wayland_surface"]), GamePlatform::Windows);
+        assert_eq!(windows, vec!["VK_KHR_win32_surface"]);
+    }
+
+    #[test]
+    fn the_linux_surfaces_match_the_game_source() {
+        let source = include_str!("../../../../native/vulkan_extensions.cpp");
+        let start = source.find("InstanceChoice select_linux_instance_extensions").expect("Linux selection in vulkan_extensions.cpp");
+        let body = &source[start..start + source[start..].find("\n}\n").expect("end of the function")];
+        assert!(body.contains("\"VK_KHR_surface\""));
+        for name in LINUX_WINDOW_SURFACES {
+            assert!(body.contains(&format!("\"{name}\"")), "{name} not in the Linux game's surface list");
+        }
     }
 
     #[test]

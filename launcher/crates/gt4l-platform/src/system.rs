@@ -2,7 +2,7 @@
 //! readings into a message are pure and tested in `gt4l_core::system_check`.
 //!
 //! - `read_cpu_features`: CPUID leaf 1 (SSE3, SSSE3, SSE4.1).
-//! - `probe_vulkan`: loads `vulkan-1.dll` from System32 (as the game does), lists the instance extensions, creates a
+//! - `probe_vulkan`: loads `vulkan-1.dll` from System32 (as the game does; on Linux `libvulkan.so.1`, TASK-074), lists the instance extensions, creates a
 //!   bare Vulkan 1.0 instance with no extensions or layers, lists the GPUs with their Vulkan version, and destroys the
 //!   instance. It opens no window and allocates no GPU memory. A loaded driver stays in the launcher process until it
 //!   exits. The graphics cards are listed by `gpu::probe_gpus`, which uses this probe.
@@ -55,24 +55,27 @@ pub fn processor_problem(language: gt4l_core::language::Language) -> Option<Stri
     gt4l_core::system_check::cpu_problem_in(&read_cpu_features(), language)
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub fn probe_vulkan() -> VulkanProbe {
     vulkan_ffi::probe()
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn probe_vulkan() -> VulkanProbe {
     VulkanProbe::LoaderMissing
 }
 
 /// The few Vulkan 1.0 entry points the probe uses, declared by hand (no Vulkan crate in the launcher).
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 mod vulkan_ffi {
     use std::ffi::{c_char, c_void, CStr};
     use std::ptr;
 
+    #[cfg(windows)]
     use windows::core::{s, w};
+    #[cfg(windows)]
     use windows::Win32::Foundation::FreeLibrary;
+    #[cfg(windows)]
     use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32};
 
     use super::{DriverFacts, VulkanDevice, VulkanProbe};
@@ -249,6 +252,7 @@ mod vulkan_ffi {
         }
     }
 
+    #[cfg(windows)]
     pub fn probe() -> VulkanProbe {
         // SAFETY: the library is loaded from System32 only and freed at the end; every function pointer comes from the
         // loader's own vkGetInstanceProcAddr and is called with the Vulkan 1.0 signatures declared above.
@@ -264,6 +268,41 @@ mod vulkan_ffi {
                 None => VulkanProbe::LoaderMissing,
             };
             let _ = FreeLibrary(library);
+            result
+        }
+    }
+
+    // TASK-074 (Linux): the system Vulkan loader through the C library's dlopen (glibc 2.34 and later keep it in libc.so.6),
+    // declared by hand as the Vulkan entry points are. `libvulkan.so.1` is the loader's ABI name, the one the game loads.
+    #[cfg(target_os = "linux")]
+    const RTLD_NOW: i32 = 2;
+    #[cfg(target_os = "linux")]
+    const RTLD_LOCAL: i32 = 0;
+    #[cfg(target_os = "linux")]
+    unsafe extern "C" {
+        fn dlopen(file: *const c_char, mode: i32) -> *mut c_void;
+        fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
+        fn dlclose(handle: *mut c_void) -> i32;
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn probe() -> VulkanProbe {
+        // SAFETY: dlopen and dlsym are called with NUL-terminated names; the handle is closed at the end; every function
+        // pointer comes from the loader's own vkGetInstanceProcAddr and is called with the Vulkan 1.0 signatures above
+        // ("system" is the C calling convention on Linux).
+        unsafe {
+            let library = dlopen(c"libvulkan.so.1".as_ptr(), RTLD_NOW | RTLD_LOCAL);
+            if library.is_null() {
+                return VulkanProbe::LoaderMissing;
+            }
+            let address = dlsym(library, c"vkGetInstanceProcAddr".as_ptr());
+            let result = if address.is_null() {
+                VulkanProbe::LoaderMissing
+            } else {
+                let get: GetInstanceProcAddr = std::mem::transmute::<*mut c_void, GetInstanceProcAddr>(address);
+                probe_with(get)
+            };
+            dlclose(library);
             result
         }
     }
