@@ -45,6 +45,10 @@ pub fn is_forbidden(path: &str) -> bool {
     if EXTENSIONS.iter().any(|extension| name.ends_with(extension)) {
         return true;
     }
+    // TASK-074 (Linux): the game programs have no extension there, and shared libraries end in `.so` or `.so.N`.
+    if matches!(name, "gt4" | "gt4-spec2" | "gt4_linux_window") || name.ends_with(".so") || name.contains(".so.") {
+        return true;
+    }
     if name.starts_with("card") {
         return true;
     }
@@ -540,6 +544,9 @@ mod tests {
             "prepared/SCUS_973.28",
             "gt4.exe",
             "gt4-gs.dll",
+            "game/gt4",
+            "game/gt4-spec2",
+            "game/libSDL3.so.0",
             "Replays/BASCUS-97328R0001/data",
             "backups/card.mcd",
             "sessions/session-1/gt4-gs.ps2",

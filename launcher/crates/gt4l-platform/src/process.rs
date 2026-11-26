@@ -401,8 +401,13 @@ pub fn shell_run_as_admin(_program: &std::path::Path, _arguments: Option<&str>) 
 
 /// Executable names of the game and its renderer process: neither may run while files move.
 /// The old names (1.2.x and before) are listed too: a 1.2.x game may still run while the update starts.
+#[cfg(windows)]
 pub const GAME_PROCESS_NAMES: &[&str] =
     &["gt4.exe", "gt4-spec2.exe", "gt4vulkan.exe", "gt4vulkan-spec2.exe", "gt4-gs.exe"];
+
+/// TASK-074 (Linux): the game programs of a Linux launcher folder, and the name of the build tree's program.
+#[cfg(not(windows))]
+pub const GAME_PROCESS_NAMES: &[&str] = &["gt4", "gt4-spec2", "gt4_linux_window"];
 
 /// `ERROR_CANCELLED`: the UAC prompt was declined.
 pub const ERROR_CANCELLED: u32 = 1223;

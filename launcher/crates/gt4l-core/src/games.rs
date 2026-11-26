@@ -29,12 +29,17 @@ pub struct Game {
     pub replay_prefix: &'static str,
 }
 
+/// The game programs inside `<program folder>/game`: `.exe` on Windows; on Linux (TASK-074) the same names without an
+/// extension, as `scripts/linux/launcher-dist.sh` copies them.
+pub const GT4_EXECUTABLE: &str = if cfg!(windows) { "gt4.exe" } else { "gt4" };
+pub const SPEC2_EXECUTABLE: &str = if cfg!(windows) { "gt4-spec2.exe" } else { "gt4-spec2" };
+
 /// Gran Turismo 4 v2.00 (USA, SCUS-97328).
 pub const GT4: Game = Game {
     id: "gt4",
     display_name: "Gran Turismo 4",
     serial: "SCUS-97328",
-    executable: "gt4.exe",
+    executable: GT4_EXECUTABLE,
     elf_name: "SCUS_973.28",
     logo_asset: "assets/logo-gt4.png",
     save_folder: "BASCUS-97328GAMEDATA",
@@ -47,7 +52,7 @@ pub const SPEC2: Game = Game {
     id: "spec2",
     display_name: "Gran Turismo 4 Spec II",
     serial: "SCUS-97436",
-    executable: "gt4-spec2.exe",
+    executable: SPEC2_EXECUTABLE,
     elf_name: "SCUS_974.36",
     logo_asset: "assets/logo-gt4.png",
     save_folder: "BASCUS-97436GAMEDATA",
@@ -106,8 +111,11 @@ mod tests {
         assert_eq!(by_id("spec2"), Some(&SPEC2));
         assert_eq!(by_id("gt5"), None);
         assert_eq!(by_id_or_default("gt5"), &GT4);
-        assert_eq!(GT4.executable, "gt4.exe");
-        assert_eq!(SPEC2.executable, "gt4-spec2.exe");
+        if cfg!(windows) {
+            assert_eq!((GT4.executable, SPEC2.executable), ("gt4.exe", "gt4-spec2.exe"));
+        } else {
+            assert_eq!((GT4.executable, SPEC2.executable), ("gt4", "gt4-spec2"));
+        }
         assert_eq!((GT4.elf_name, SPEC2.elf_name), ("SCUS_973.28", "SCUS_974.36"));
         assert_eq!((GT4.display_name, SPEC2.display_name), ("Gran Turismo 4", "Gran Turismo 4 Spec II"));
         assert_ne!(GT4.id, SPEC2.id);

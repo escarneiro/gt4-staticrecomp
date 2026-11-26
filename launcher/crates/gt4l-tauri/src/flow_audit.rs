@@ -282,7 +282,7 @@ fn synthetic_flow_end_to_end() {
     // program is a text file. The GSdx launch line is covered by the launch contract tests.
     let program = root.join("program");
     fs::create_dir_all(program.join("game")).unwrap();
-    fs::write(program.join("game").join("gt4.exe"), b"stand-in, never started").unwrap();
+    fs::write(program.join("game").join(gt4l_core::games::GT4_EXECUTABLE), b"stand-in, never started").unwrap();
     let refusal = play_plan(&second, &program).unwrap_err();
     assert!(refusal.starts_with("GSdx could not run the game: GSdx is not installed yet"), "{refusal}");
     assert!(refusal.contains("log folder"), "{refusal}");
@@ -658,7 +658,7 @@ fn without_gsdx_setup_finishes_and_play_refuses_with_the_log_folder() {
     let second = launch(&dirs, &pins);
     let program = root.join("program");
     fs::create_dir_all(program.join("game")).unwrap();
-    fs::write(program.join("game").join("gt4.exe"), b"stand-in, never started").unwrap();
+    fs::write(program.join("game").join(gt4l_core::games::GT4_EXECUTABLE), b"stand-in, never started").unwrap();
     let refusal = play_plan(&second, &program).unwrap_err();
     assert_eq!(
         refusal,
@@ -901,11 +901,11 @@ fn two_games_install_side_by_side_and_never_mix() {
     assert_eq!(commands::games_list_of(&second).unwrap()["games"].as_array().unwrap().iter().filter(|g| g["installed"] == json!(true)).count(), 2);
 
     // Each game plays with its own program, ELF, disc and card (checked up to the GSdx step, which a test has none of).
-    let program = stand_in_programs(&root, &["gt4.exe"]);
+    let program = stand_in_programs(&root, &[gt4l_core::games::GT4_EXECUTABLE]);
     commands::select_game_of("spec2".into(), &second).unwrap();
     let missing = commands::prepare_play(&second, &program, &json!({})).map(|_| ()).unwrap_err();
     assert!(missing.contains("Gran Turismo 4 Spec II") && missing.contains("missing"), "{missing}");
-    stand_in_programs(&root, &["gt4-spec2.exe"]);
+    stand_in_programs(&root, &[gt4l_core::games::SPEC2_EXECUTABLE]);
     let refusal = commands::prepare_play(&second, &program, &json!({})).map(|_| ()).unwrap_err();
     assert!(refusal.starts_with("GSdx could not run the game"), "reaches the shared GSdx check: {refusal}");
 
@@ -1096,7 +1096,7 @@ fn retroachievements_options_and_launch_environment() {
     }
 
     // 3. Stand-in executables for both
-    let program = stand_in_programs(&root, &["gt4.exe", "gt4-spec2.exe"]);
+    let program = stand_in_programs(&root, &[gt4l_core::games::GT4_EXECUTABLE, gt4l_core::games::SPEC2_EXECUTABLE]);
 
     // 4. Stand-in GSdx installation so prepare_play succeeds
     let gs_dir = data.join("gs");

@@ -55,7 +55,7 @@ pub const USER_FOLDER_NAME: &str = "Gran Turismo 4";
 pub const MOVED_USER_FOLDER_NAME: &str = "Gran Turismo 4 (moved to AppData)";
 
 /// Name of the game executable inside the game folder.
-pub const GAME_EXECUTABLE: &str = "gt4.exe";
+pub const GAME_EXECUTABLE: &str = crate::games::GT4_EXECUTABLE;
 
 /// Name of the custom texture folder (TASK-088; TASK-093: gt4-gs 1.2.1 reads the folder itself).
 pub const TEXTURES_FOLDER_NAME: &str = "Textures";
