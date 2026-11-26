@@ -54,10 +54,10 @@ fn an_import_or_harvest_of_one_game_never_reaches_the_other() {
     // Import into Gran Turismo 4: Spec II sees nothing.
     let report = gt4.import_card_image(&card_with(1)).unwrap();
     assert_eq!(report.added.len(), 1);
-    gt4.activate_slot("Save 01").unwrap();
-    assert_eq!(gt4.active_save().unwrap().as_deref(), Some(GT4_GAME_SAVE));
+    gt4.select("Imported save").unwrap();
+    assert_eq!(gt4.active_save().unwrap().as_deref(), Some("Imported save"));
     assert_eq!(spec2.active_save().unwrap(), None);
-    assert!(spec2.slots().unwrap().is_empty());
+    assert_eq!(spec2.saves().unwrap(), vec!["Default save".to_string()], "only Spec II's own empty default save");
 
     // The runtime card of each game is built from its own library only.
     let gt4_card = Card::from_image(&gt4.build_card(&[]).unwrap()).unwrap();
@@ -71,7 +71,7 @@ fn an_import_or_harvest_of_one_game_never_reaches_the_other() {
     assert_eq!(refused.skipped, vec![GT4_GAME_SAVE.to_string()]);
     assert_eq!(spec2.active_save().unwrap(), None);
     spec2.harvest(&Card::build(&[spec2_save(2)]).unwrap().to_image()).unwrap();
-    assert_eq!(spec2.active_save().unwrap().as_deref(), Some("BASCUS-97436GAMEDATA"));
+    assert_eq!(spec2.active_save().unwrap().as_deref(), Some("Default save"));
     let still_gt4 = Card::from_image(&gt4.build_card(&[]).unwrap()).unwrap();
     assert!(gt4saves::card::same_contents(&still_gt4.root().unwrap(), &[game_save(1)]), "Gran Turismo 4's save did not change");
     let spec2_now = Card::from_image(&spec2.build_card(&[]).unwrap()).unwrap();
@@ -97,19 +97,19 @@ fn a_spec2_save_is_kept_by_the_spec2_library_and_refused_by_the_gt4_one() {
 
     // Before the fix this save was dropped as "not a Gran Turismo 4 save"; now it is kept by its own game.
     let report = spec2.import_card_image(&image).unwrap();
-    assert_eq!(report.added, vec!["Save 01".to_string()]);
+    assert_eq!(report.added, vec!["Imported save".to_string()]);
     assert!(report.skipped.is_empty());
-    assert_eq!(spec2.slots().unwrap(), vec!["Save 01".to_string()]);
+    assert_eq!(spec2.saves().unwrap(), vec!["Default save".to_string(), "Imported save".to_string()]);
     assert!(gt4.import_card_image(&image).is_err(), "a Gran Turismo 4 library refuses a Spec II-only card");
-    assert!(gt4.slots().unwrap().is_empty());
+    assert_eq!(gt4.saves().unwrap(), vec!["Default save".to_string()]);
 
     // Harvest and build use the Spec II names: the Spec II card carries the save back.
-    spec2.activate_slot("Save 01").unwrap();
+    spec2.select("Imported save").unwrap();
     let card = Card::from_image(&spec2.build_card(&[]).unwrap()).unwrap();
     assert!(gt4saves::card::same_contents(&card.root().unwrap(), &[spec2_save(3)]));
     let harvested = spec2.harvest(&Card::build(&[spec2_save(4)]).unwrap().to_image()).unwrap();
     assert_eq!(harvested.added, vec!["BASCUS-97436GAMEDATA".to_string()]);
-    assert_eq!(spec2.active_save().unwrap().as_deref(), Some("BASCUS-97436GAMEDATA"));
+    assert_eq!(spec2.active_save().unwrap().as_deref(), Some("Imported save"));
 }
 
 #[test]
@@ -121,10 +121,10 @@ fn a_mixed_card_is_split_by_game_and_nothing_is_dropped_silently() {
 
     // Each library takes its own items; the other game's item is reported as skipped, never lost.
     let gt4_report = gt4.import_items(&gt4saves::library::items_of_card_image(&image).unwrap()).unwrap();
-    assert_eq!(gt4_report.added, vec!["Save 01".to_string()]);
+    assert_eq!(gt4_report.added, vec!["Imported save".to_string()]);
     assert_eq!(gt4_report.skipped, vec!["BASCUS-97436GAMEDATA".to_string()]);
     let spec2_report = spec2.import_items(&gt4saves::library::items_of_card_image(&image).unwrap()).unwrap();
-    assert_eq!(spec2_report.added, vec!["Save 01".to_string()]);
+    assert_eq!(spec2_report.added, vec!["Imported save".to_string()]);
     assert_eq!(spec2_report.skipped, vec!["BASCUS-97328GAMEDATA".to_string()]);
 }
 

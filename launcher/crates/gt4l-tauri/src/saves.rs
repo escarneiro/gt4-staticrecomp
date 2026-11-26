@@ -17,7 +17,7 @@ use gt4l_core::moves;
 use gt4l_core::paths::{DataDirs, UserDirs, UserRootSource};
 use gt4saves::card::Node;
 use gt4saves::folder::FolderError;
-use gt4saves::library::{items_of_card_image, items_of_folder_card, items_of_psu, Library, LibraryError, LibraryPaths, Report, SLOT_PREFIX};
+use gt4saves::library::{items_of_card_image, items_of_folder_card, items_of_psu, Library, LibraryError, LibraryPaths, Report};
 use gt4saves::migration::{self, LegacySources, Outcome, Targets};
 use gt4saves::{CardError, SaveNames};
 
@@ -42,19 +42,20 @@ pub struct OpenedLibrary {
 
 /// Moves a library of launchers before 1.0.0 (`library\memcard` and friends in `pre_1_0_root`, the old
 /// `%LOCALAPPDATA%\GT4Recomp`) into the library once (see `gt4saves::migration`), then opens the library. When the
-/// library folder cannot be used, the data-folder fallback is used, so Play never fails on it.
-pub fn open(dirs: &DataDirs, user: &UserDirs, game: &Game, pre_1_0_root: Option<&Path>) -> Result<OpenedLibrary, String> {
+/// library folder cannot be used, the data-folder fallback is used, so Play never fails on it. `default_name` is the name of
+/// the empty save made when the saves folder holds none (TASK-074).
+pub fn open(dirs: &DataDirs, user: &UserDirs, game: &Game, pre_1_0_root: Option<&Path>, default_name: &str) -> Result<OpenedLibrary, String> {
     let names = names_of(game);
     let mut log = Vec::new();
     if let UserRootSource::Fallback(reason) = user.source() {
         log.push(format!("save library: WARNING {reason}; using {}", user.root().display()));
     }
-    match open_at(user, names, pre_1_0_root, &mut log) {
+    match open_at(user, names, pre_1_0_root, default_name, &mut log) {
         Ok((library, notice)) => Ok(OpenedLibrary { library, user: user.clone(), log, notice }),
         Err(error) if !matches!(user.source(), UserRootSource::Fallback(_)) => {
             let fallback = user.with_library_at(&dirs.fallback_user_root(), UserRootSource::Fallback(error.clone()));
             log.push(format!("save library: WARNING {} cannot be used ({error}); using {}", user.root().display(), fallback.root().display()));
-            let (library, notice) = open_at(&fallback, names, pre_1_0_root, &mut log)?;
+            let (library, notice) = open_at(&fallback, names, pre_1_0_root, default_name, &mut log)?;
             let notice = notice.or_else(|| Some(format!("Saves are kept in {} because {} could not be used.", fallback.root().display(), user.root().display())));
             Ok(OpenedLibrary { library, user: fallback, log, notice })
         }
@@ -62,7 +63,13 @@ pub fn open(dirs: &DataDirs, user: &UserDirs, game: &Game, pre_1_0_root: Option<
     }
 }
 
-fn open_at(user: &UserDirs, names: SaveNames, pre_1_0_root: Option<&Path>, log: &mut Vec<String>) -> Result<(Library, Option<String>), String> {
+fn open_at(
+    user: &UserDirs,
+    names: SaveNames,
+    pre_1_0_root: Option<&Path>,
+    default_name: &str,
+    log: &mut Vec<String>,
+) -> Result<(Library, Option<String>), String> {
     guard::protect_user_library(user.root());
     let mut notice = None;
     if let Some(old_root) = pre_1_0_root {
@@ -93,42 +100,39 @@ fn open_at(user: &UserDirs, names: SaveNames, pre_1_0_root: Option<&Path>, log: 
         };
     }
     let paths = LibraryPaths { saves: user.saves(), replays: user.replays(), backups: user.card_backups() };
-    let library = Library::open_paths(&paths, names).map_err(|error| format!("save library: {error}"))?;
+    let library = Library::open_named(&paths, names, default_name).map_err(|error| format!("save library: {error}"))?;
     Ok((library, notice))
 }
 
 /// One row of the Saves or Replays page.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Item {
-    /// Library name: `Save NN` for an inactive slot, the game's save name, or a replay name.
+    /// Library name: the save's name (its folder in `Saves`, TASK-074) or a replay name.
     pub name: String,
     pub label: String,
     /// The save the next start uses.
     pub active: bool,
-    /// Last change of the item's folder, ISO 8601 UTC (empty when unknown).
+    /// Last change of the item's game data, ISO 8601 UTC (empty when unknown or when the save is empty).
     pub modified: String,
-    /// The player gave the save a name (`label` is that name; the library name stays `Save NN`).
-    pub renamed: bool,
     /// The game the item belongs to (`gt4` or `spec2`). Empty for replays, which the page lists per game.
     pub game: String,
-    /// TASK-074: the active save holds no game data yet (a new save the game creates at the next Play).
+    /// TASK-074: the save holds no game data yet (the game creates them at its next Play).
     pub empty: bool,
 }
 
 /// The page's item shape (`ui/js/pages/library.js`): `id` is what the page sends back to `saves_activate`,
 /// `saves_delete`, `saves_export`, `saves_rename` and `replays_delete`: the library name, prefixed with the game id
-/// (`gt4:Save 02`) for a save. `slot` is the library name alone; `name` is the text shown.
+/// (`gt4:My career`) for a save. `slot` is the library name alone; `name` is the text shown.
 impl Serialize for Item {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         let id = if self.game.is_empty() { self.name.clone() } else { format!("{}:{}", self.game, self.name) };
-        let mut row = serializer.serialize_struct("Item", 8)?;
+        let mut row = serializer.serialize_struct("Item", 7)?;
         row.serialize_field("id", &id)?;
         row.serialize_field("slot", &self.name)?;
         row.serialize_field("name", &self.label)?;
         row.serialize_field("active", &self.active)?;
         row.serialize_field("modified", &self.modified)?;
-        row.serialize_field("renamed", &self.renamed)?;
         row.serialize_field("game", &self.game)?;
         row.serialize_field("empty", &self.empty)?;
         row.end()
@@ -140,56 +144,21 @@ fn modified_of(folder: &Path) -> String {
     fs::metadata(folder).and_then(|metadata| metadata.modified()).map(gt4saves::iso8601_utc).unwrap_or_default()
 }
 
-/// The saves of a library: the active save and the inactive slots. Without `show_empty_active`, an active save that holds
-/// no game data is left out.
+/// TASK-074: every save of the library, one per folder of `Saves`, in name order (letter case ignored), like the memory
+/// cards of an emulator. The selected one is `active`; choosing another moves nothing, so a row stays where it is. A save
+/// with no game data yet (a new install, or after New save) is `empty`: the game creates it at its next Play.
 pub fn saves(library: &Library) -> Result<Vec<Item>, String> {
-    saves_with(library, false)
-}
-
-/// TASK-074: every save of the library by name, in name order (letter case ignored), so a row stays where it is when
-/// another save becomes the one the next Play uses: only `active` moves. With `show_empty_active`, an active save that
-/// holds no game data yet (a new install, or after New save) is a row too (`empty`), the save the game creates.
-pub fn saves_with(library: &Library, show_empty_active: bool) -> Result<Vec<Item>, String> {
-    let mut items = Vec::new();
-    let game_save = library.names().game_save;
-    let has_active = library.active_save().map_err(|error| error.to_string())?.is_some();
-    if has_active || show_empty_active {
-        let named = library.display_name(game_save);
-        items.push(Item {
-            name: game_save.to_string(),
-            renamed: named.is_some(),
-            game: String::new(),
-            label: named.unwrap_or_else(|| "Active save".to_string()),
-            active: true,
-            modified: if has_active { modified_of(&library.active_dir().join(game_save)) } else { String::new() },
-            empty: !has_active,
-        });
-    }
-    for slot in library.slots().map_err(|error| error.to_string())? {
-        let modified = modified_of(&library.slot_dir(&slot).join(game_save));
-        let named = library.display_name(&slot);
-        items.push(Item {
-            renamed: named.is_some(),
-            game: String::new(),
-            label: named.unwrap_or_else(|| slot.clone()),
-            name: slot,
-            active: false,
-            modified,
-            empty: false,
-        });
-    }
-    items.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()).then_with(|| a.name.cmp(&b.name)));
-    Ok(items)
-}
-
-/// TASK-074: gives every save of a game a name once (`Library::name_unnamed_saves`). An unnamed active save is the default
-/// save, except an empty one (the save the next Play creates) next to other saves, which is a new save. Slots keep the
-/// label they showed (`Save NN`). Returns what was written.
-pub fn name_unnamed(library: &Library, language: Language) -> Result<Vec<(String, String)>, String> {
-    let others = library.slots().map_err(|error| error.to_string())?;
-    let empty_active = library.active_save().map_err(|error| error.to_string())?.is_none();
-    let id = if empty_active && !others.is_empty() { "saves.new_save_name" } else { "saves.default_name" };
-    library.name_unnamed_saves(messages::text(id, language)).map_err(|error| error.to_string())
+    let selected = library.ensure_selected().map_err(|error| error.to_string())?;
+    Ok(library
+        .saves()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|name| {
+            let empty = !library.has_game_data(&name);
+            let modified = if empty { String::new() } else { modified_of(&library.game_data_dir(&name)) };
+            Item { label: name.clone(), active: name == selected, modified, game: String::new(), empty, name }
+        })
+        .collect())
 }
 
 /// TASK-074: the name an imported save gets: the picked file's name without its extension (`gran-turismo-4.22070.ps2`
@@ -208,7 +177,7 @@ pub fn replays(library: &Library) -> Result<Vec<Item>, String> {
         .into_iter()
         .map(|name| {
             let modified = modified_of(&library.replays_dir().join(&name));
-            Item { label: name.clone(), name, active: false, modified, renamed: false, game: String::new(), empty: false }
+            Item { label: name.clone(), name, active: false, modified, game: String::new(), empty: false }
         })
         .collect())
 }
@@ -232,13 +201,9 @@ pub fn import_path(libraries: &[(&'static Game, &Library)], path: &Path, languag
         if mine.is_empty() {
             continue;
         }
-        let report = library.import_items(&mine).map_err(|error| import_error_text(&error, language))?;
-        // TASK-074: a game save from the file is named after the file; the player can rename it.
-        if let Some(name) = import_name(path) {
-            for added in report.added.iter().filter(|added| added.starts_with(gt4saves::library::SLOT_PREFIX)) {
-                library.name_save_uniquely(added, &name).map_err(|error| error.to_string())?;
-            }
-        }
+        // TASK-074: a game save from the file is a new save named after the file; the player can rename it.
+        let save_name = import_name(path).unwrap_or_else(|| messages::text("saves.imported_name", language).to_string());
+        let report = library.import_items_named(&mine, &save_name).map_err(|error| import_error_text(&error, language))?;
         outcome.per_game.push((game, report));
     }
     if outcome.per_game.is_empty() {
@@ -305,19 +270,39 @@ fn describe_found(found: &[String], language: Language) -> String {
     parts.join(", ")
 }
 
-/// Starts a new save. What the last run left on the card is harvested first, so its progress is kept; the card is then
-/// moved to `backups`, so the next Play does not harvest the old save back into the empty Active folder. Returns the slot
-/// the old save went to.
-pub fn new_save(library: &Library, runtime_card: &Path) -> Result<Option<String>, String> {
-    new_save_with(library, runtime_card, &moves::MoveOps::real())
+/// Starts a new save: an empty save named `name` (made unique) becomes the selected one, so the next Play makes a new
+/// profile. What the last run left on the card is harvested first into the save it belongs to (the one selected until
+/// now), so its progress is kept; the card is then moved to `backups`, so the next Play does not harvest the old save into
+/// the new one. Returns the name used.
+pub fn new_save(library: &Library, runtime_card: &Path, name: &str) -> Result<String, String> {
+    new_save_with(library, runtime_card, name, &moves::MoveOps::real())
 }
 
 /// [`new_save`] with the file operations given, so a test can make the move between the card and the backups report
 /// another volume.
-fn new_save_with(library: &Library, runtime_card: &Path, file_ops: &moves::MoveOps<'_>) -> Result<Option<String>, String> {
+fn new_save_with(library: &Library, runtime_card: &Path, name: &str, file_ops: &moves::MoveOps<'_>) -> Result<String, String> {
     harvest_card(library, runtime_card)?;
     park_runtime_card(library, runtime_card, gt4saves::library::NEW_SAVE_BACKUP_SUFFIX, file_ops)?;
-    library.new_save().map_err(|error| error.to_string())
+    library.new_save(name).map_err(|error| error.to_string())
+}
+
+/// TASK-074: after an import from the setup wizard, the save the import brought (a new save, or the save that already held
+/// the same data) becomes the one the next Play uses. The save selected before is removed when it is an empty folder (the
+/// default save setup made, which nothing was written into). Returns the save now selected, or `None` when the import
+/// brought no save of this game.
+pub fn adopt_imported(library: &Library, report: &Report, runtime_card: &Path) -> Result<Option<String>, String> {
+    let saves = library.saves().map_err(|error| error.to_string())?;
+    let Some(imported) = report.added.iter().chain(report.unchanged.iter()).find(|name| saves.contains(name)).cloned() else {
+        return Ok(None);
+    };
+    let before = library.ensure_selected().map_err(|error| error.to_string())?;
+    let chosen = activate(library, &imported, runtime_card)?;
+    let unused = before != chosen && fs::read_dir(library.save_dir(&before)).is_ok_and(|mut entries| entries.next().is_none());
+    if unused {
+        // Only an empty folder can go (remove_dir refuses anything else), so no save is ever lost here.
+        let _ = fs::remove_dir(library.save_dir(&before));
+    }
+    Ok(Some(chosen))
 }
 
 /// Moves the card the game reads into `<backups>\<timestamp><suffix>`, so the next Play builds a fresh card instead of
@@ -343,18 +328,11 @@ fn park_runtime_card(
 
 /// The `.psu` bytes of a save, and the file name the save dialog suggests (`<name>.psu`).
 pub fn export(library: &Library, name: &str) -> Result<(Vec<u8>, String), String> {
-    let bytes = library.export_psu(name).map_err(|error| error.to_string())?;
-    let base = library.display_name(name).unwrap_or_else(|| {
-        if name == library.names().game_save {
-            "Active save".to_string()
-        } else {
-            name.to_string()
-        }
-    });
-    Ok((bytes, format!("{base}.psu")))
+    let bytes = library.export_save_psu(name).map_err(|error| error.to_string())?;
+    Ok((bytes, format!("{name}.psu")))
 }
 
-/// Gives a save a display name. Returns the name as stored.
+/// Renames a save (its folder). Returns the name as stored.
 pub fn rename(library: &Library, name: &str, new_name: &str, language: Language) -> Result<String, String> {
     library.rename_save(name, new_name).map_err(|error| match error {
         LibraryError::Name(_) => messages::text("saves.name_empty", language).to_string(),
@@ -362,9 +340,24 @@ pub fn rename(library: &Library, name: &str, new_name: &str, language: Language)
     })
 }
 
-/// Makes a slot the active save. The save that was active moves to a new slot.
-pub fn activate(library: &Library, slot: &str) -> Result<(), String> {
-    library.activate_slot(slot).map_err(|error| error.to_string())
+/// Makes `name` the save the next start uses (TASK-074). The card the last run left is harvested first into the save it
+/// belongs to (the one selected until now) and then moved to `backups`: otherwise the next Play would harvest that card
+/// into the newly selected save and overwrite it with the other save's progress. Nothing else moves.
+pub fn activate(library: &Library, name: &str, runtime_card: &Path) -> Result<String, String> {
+    activate_with(library, name, runtime_card, &moves::MoveOps::real())
+}
+
+fn activate_with(library: &Library, name: &str, runtime_card: &Path, file_ops: &moves::MoveOps<'_>) -> Result<String, String> {
+    let selected = library.ensure_selected().map_err(|error| error.to_string())?;
+    if selected.to_lowercase() == name.to_lowercase() {
+        return Ok(selected);
+    }
+    if !library.saves().map_err(|error| error.to_string())?.iter().any(|save| save.to_lowercase() == name.to_lowercase()) {
+        return Err(LibraryError::NotFound(name.to_string()).to_string());
+    }
+    harvest_card(library, runtime_card)?;
+    park_runtime_card(library, runtime_card, gt4saves::library::SWITCH_BACKUP_SUFFIX, file_ops)?;
+    library.select(name).map_err(|error| error.to_string())
 }
 
 /// TASK-164 (issue #160): whether the next start meets the game's first-start questions (create the game data, then format
@@ -491,13 +484,13 @@ fn report_text(report: &Report, language: Language) -> String {
     parts.join(" ")
 }
 
-/// Sends a library item to the Recycle Bin. Deleting the active save also parks the runtime card: what the last run left on
-/// it is harvested first (so unharvested progress is not lost), then the card moves to `backups` as
+/// Sends a save or replay to the Recycle Bin. Deleting the selected save also parks the runtime card: what the last run left
+/// on it is harvested first (so unharvested progress is not lost), then the card moves to `backups` as
 /// `<timestamp>-before-delete.ps2`. Without that, the next Play would harvest the deleted save back from the stale card,
-/// which is the whole of issue #208 on an install whose card and library are on different drives. The caller refuses this
-/// while the game runs.
-pub fn delete(library: &Library, item: &Item, runtime_card: &Path) -> Result<(), String> {
-    delete_with(library, item, runtime_card, &recycle::move_to_recycle_bin, &moves::MoveOps::real())
+/// which is the whole of issue #208 on an install whose card and library are on different drives. The first save left is
+/// then selected (an empty default save when none is left). The caller refuses this while the game runs.
+pub fn delete(library: &Library, item: &Item, is_save: bool, runtime_card: &Path) -> Result<(), String> {
+    delete_with(library, item, is_save, runtime_card, &recycle::move_to_recycle_bin, &moves::MoveOps::real())
 }
 
 /// [`delete`] with the removal of the item's folder and the file operations given (the Recycle Bin and real moves for the
@@ -505,40 +498,28 @@ pub fn delete(library: &Library, item: &Item, runtime_card: &Path) -> Result<(),
 fn delete_with(
     library: &Library,
     item: &Item,
+    is_save: bool,
     runtime_card: &Path,
     remove: &dyn Fn(&Path) -> Result<(), String>,
     file_ops: &moves::MoveOps<'_>,
 ) -> Result<(), String> {
-    if item.active {
-        return delete_active(library, runtime_card, remove, file_ops);
+    if !is_save {
+        let path = library.replays_dir().join(&item.name);
+        if !path.is_dir() {
+            return Err(format!("{} is not in the library any more", item.label));
+        }
+        return remove(&path);
     }
-    let path = if item.name.starts_with(SLOT_PREFIX) {
-        library.slot_dir(&item.name)
-    } else {
-        library.replays_dir().join(&item.name)
-    };
-    if !path.is_dir() {
+    let path = library.save_dir(&item.name);
+    if item.name.is_empty() || !path.is_dir() {
         return Err(format!("{} is not in the library any more", item.label));
     }
-    remove(&path)
-}
-
-/// Deletes the active save: harvest the runtime card, park it in `backups`, move the save to the Recycle Bin and clear its
-/// display name. The next Play builds a card without a game save, so the game starts a new profile.
-fn delete_active(
-    library: &Library,
-    runtime_card: &Path,
-    remove: &dyn Fn(&Path) -> Result<(), String>,
-    file_ops: &moves::MoveOps<'_>,
-) -> Result<(), String> {
-    harvest_card(library, runtime_card)?;
-    let path = library.active_save_dir();
-    if !path.is_dir() {
-        return Err("The active save is not in the library any more".to_string());
+    if item.active {
+        harvest_card(library, runtime_card)?;
+        park_runtime_card(library, runtime_card, gt4saves::library::DELETE_BACKUP_SUFFIX, file_ops)?;
     }
-    park_runtime_card(library, runtime_card, gt4saves::library::DELETE_BACKUP_SUFFIX, file_ops)?;
     remove(&path)?;
-    library.clear_active_name().map_err(|error| error.to_string())
+    library.ensure_selected().map(|_| ()).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -558,12 +539,14 @@ mod tests {
     fn open_scratch(data: &Path) -> (UserDirs, Library) {
         let dirs = DataDirs::new(data);
         let user = UserDirs::new(data.join("Documents").join("Gran Turismo 4"), UserRootSource::Override);
-        let opened = open(&dirs, &user, &GT4, Some(data)).unwrap();
+        let opened = open(&dirs, &user, &GT4, Some(data), DEFAULT).unwrap();
         (opened.user, opened.library)
     }
 
     const STAMP: [u8; 8] = [0, 39, 50, 7, 12, 10, 0xEA, 0x07];
     const REPLAY: &str = "BASCUS-97328R0001";
+    /// The name of the empty save a new library makes.
+    const DEFAULT: &str = "Default save";
 
     fn scratch(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!("gt4l-saves-{}-{name}", std::process::id()));
@@ -609,7 +592,7 @@ mod tests {
 
         let report = harvest_card(&library, &runtime_card).unwrap();
         assert!(report.added.contains(&GT4.save_folder.to_string()));
-        assert_eq!(names(&saves(&library).unwrap()), vec![GT4.save_folder.to_string()]);
+        assert_eq!(names(&saves(&library).unwrap()), vec![DEFAULT.to_string()], "the default save took the game's data");
         assert_eq!(names(&replays(&library).unwrap()), vec![REPLAY.to_string()]);
 
         fs::remove_file(&runtime_card).unwrap();
@@ -617,7 +600,7 @@ mod tests {
         let built = Card::from_image(&fs::read(&runtime_card).unwrap()).unwrap().root().unwrap();
         let built_names: Vec<String> = built.iter().map(|node| node.name()).collect();
         assert_eq!(built_names, vec![GT4.save_folder.to_string(), REPLAY.to_string()]);
-        assert!(user.saves().join("Active").join(GT4.save_folder).is_dir(), "the save is in Documents\\Gran Turismo 4\\Saves");
+        assert!(user.saves().join(DEFAULT).join(GT4.save_folder).is_dir(), "the save is in Documents\\Gran Turismo 4\\Saves");
         assert!(user.replays().join(REPLAY).is_dir());
         assert!(!data.join("library").join("memcard").exists(), "nothing is written to the old AppData library");
         let _ = fs::remove_dir_all(&data);
@@ -632,62 +615,73 @@ mod tests {
         let second = data.join("second.ps2");
         fs::write(&second, card_with(&[game_save(2)])).unwrap();
 
-        assert_eq!(import_path(&library, &first, Language::fallback()).unwrap().added, vec!["Save 01".to_string()]);
+        // TASK-074: an imported save is a new save named after its file.
+        assert_eq!(import_path(&library, &first, Language::fallback()).unwrap().added, vec!["first".to_string()]);
         // The same save again is recognised and nothing new is written.
         let again = import_path(&library, &first, Language::fallback()).unwrap();
         assert!(again.added.is_empty());
-        assert_eq!(again.unchanged, vec![GT4.save_folder.to_string()]);
-        // A different save becomes a new slot; the active save is untouched.
-        assert_eq!(import_path(&library, &second, Language::fallback()).unwrap().added, vec!["Save 02".to_string()]);
-        assert_eq!(names(&saves(&library).unwrap()), vec!["Save 01".to_string(), "Save 02".to_string()]);
-        assert!(saves(&library).unwrap().iter().all(|item| !item.active));
+        assert_eq!(again.unchanged, vec!["first".to_string()]);
+        // A different save becomes a new save; the selected save is untouched.
+        assert_eq!(import_path(&library, &second, Language::fallback()).unwrap().added, vec!["second".to_string()]);
+        let listed = saves(&library).unwrap();
+        assert_eq!(names(&listed), vec![DEFAULT.to_string(), "first".to_string(), "second".to_string()]);
+        let active: Vec<&str> = listed.iter().filter(|item| item.active).map(|item| item.name.as_str()).collect();
+        assert_eq!(active, vec![DEFAULT]);
+        assert!(listed[0].empty && !listed[1].empty && !listed[2].empty);
+        // A second file of the same name gets a number.
+        let other_dir = data.join("other");
+        fs::create_dir_all(&other_dir).unwrap();
+        let same_name = other_dir.join("first.ps2");
+        fs::write(&same_name, card_with(&[game_save(3)])).unwrap();
+        assert_eq!(import_path(&library, &same_name, Language::fallback()).unwrap().added, vec!["first (2)".to_string()]);
         let _ = fs::remove_dir_all(&data);
     }
 
     #[test]
-    fn unnamed_saves_are_named_by_their_place() {
-        let data = scratch("name-rule");
-        let (_, library) = open_scratch(&data);
-        // A new install: the empty active save is the default save.
-        assert_eq!(name_unnamed(&library, Language::fallback()).unwrap(), vec![(GT4.save_folder.to_string(), "Default save".to_string())]);
-        let fresh = scratch("name-rule-2");
-        let (_, library) = open_scratch(&fresh);
-        let source = fresh.join("career.ps2");
-        fs::write(&source, card_with(&[game_save(3)])).unwrap();
-        import_path(&library, &source, Language::fallback()).unwrap();
-        // Saves exist and nothing is active: the empty active save is a new save; the import kept its file's name.
-        assert_eq!(name_unnamed(&library, Language::fallback()).unwrap(), vec![(GT4.save_folder.to_string(), "New save".to_string())]);
-        assert_eq!(library.display_name("Save 01").as_deref(), Some("career"));
-        let _ = fs::remove_dir_all(&data);
-        let _ = fs::remove_dir_all(&fresh);
-    }
-
-    #[test]
-    fn activating_a_slot_parks_the_previous_save() {
+    fn choosing_a_save_moves_nothing_and_the_last_card_goes_to_the_save_it_belongs_to() {
         let data = scratch("activate");
         let (_, library) = open_scratch(&data);
         let runtime_card = data.join("runtime").join("card.ps2");
-        let source = data.join("source.ps2");
-        fs::write(&source, card_with(&[game_save(3)])).unwrap();
-        import_path(&library, &source, Language::fallback()).unwrap();
-        // TASK-074: an imported save is named after its file. The library had no active save, so the slot becomes it.
-        activate(&library, "Save 01").unwrap();
-        let before = saves(&library).unwrap();
-        assert_eq!(names(&before), vec![GT4.save_folder.to_string()]);
-        assert!(before[0].active && before[0].label == "source");
-
-        let other = data.join("other.ps2");
-        fs::write(&other, card_with(&[game_save(4)])).unwrap();
-        import_path(&library, &other, Language::fallback()).unwrap();
-        // The list is in name order and stays so: making "other" active swaps the saves in place (Save 01 is reused),
-        // and only the active mark moves.
+        fs::create_dir_all(runtime_card.parent().unwrap()).unwrap();
+        for (file, seed) in [("source", 3), ("other", 4)] {
+            let path = data.join(format!("{file}.ps2"));
+            fs::write(&path, card_with(&[game_save(seed)])).unwrap();
+            import_path(&library, &path, Language::fallback()).unwrap();
+        }
         let labels = |items: &[Item]| items.iter().map(|item| (item.label.clone(), item.active)).collect::<Vec<_>>();
-        assert_eq!(labels(&saves(&library).unwrap()), vec![("other".to_string(), false), ("source".to_string(), true)]);
-        activate(&library, "Save 01").unwrap();
-        assert_eq!(labels(&saves(&library).unwrap()), vec![("other".to_string(), true), ("source".to_string(), false)]);
-        let after = names(&saves(&library).unwrap());
-        assert_eq!(after, vec![GT4.save_folder.to_string(), "Save 01".to_string()], "other (active) first, source in Save 01");
+        assert_eq!(
+            labels(&saves(&library).unwrap()),
+            vec![(DEFAULT.to_string(), true), ("other".to_string(), false), ("source".to_string(), false)]
+        );
+
+        // The last Play of the default save left its card behind, not harvested yet.
+        fs::write(&runtime_card, card_with(&[game_save(9)])).unwrap();
+        assert_eq!(activate(&library, "source", &runtime_card).unwrap(), "source");
+        assert_eq!(
+            labels(&saves(&library).unwrap()),
+            vec![(DEFAULT.to_string(), false), ("other".to_string(), false), ("source".to_string(), true)],
+            "the rows stay where they are; only the mark moves"
+        );
+        let held = |name: &str| gt4saves::folder::import_item(&library.game_data_dir(name)).unwrap();
+        assert!(gt4saves::card::same_contents(&[held(DEFAULT)], &[game_save(9)]), "the card went to the save it belongs to");
+        assert!(!runtime_card.exists(), "and was set aside");
+        assert_eq!(parked_cards(&library, gt4saves::library::SWITCH_BACKUP_SUFFIX).len(), 1);
+
+        // The next Play builds the chosen save, and its harvest goes there.
         prepare_card(&library, &runtime_card, Language::fallback()).unwrap();
+        let built = Card::from_image(&fs::read(&runtime_card).unwrap()).unwrap().root().unwrap();
+        assert!(gt4saves::card::same_contents(&built, &[game_save(3)]));
+        fs::write(&runtime_card, card_with(&[game_save(5)])).unwrap();
+        harvest_card(&library, &runtime_card).unwrap();
+        assert!(gt4saves::card::same_contents(&[held("source")], &[game_save(5)]));
+        assert!(gt4saves::card::same_contents(&[held(DEFAULT)], &[game_save(9)]), "the default save is untouched");
+        assert!(gt4saves::card::same_contents(&[held("other")], &[game_save(4)]));
+
+        // Choosing the save already chosen, or a save that does not exist, changes nothing.
+        assert_eq!(activate(&library, "SOURCE", &runtime_card).unwrap(), "source");
+        assert!(runtime_card.exists(), "nothing to set aside when the choice does not change");
+        assert!(activate(&library, "missing", &runtime_card).is_err());
+        assert!(runtime_card.exists());
         let _ = fs::remove_dir_all(&data);
     }
 
@@ -729,8 +723,8 @@ mod tests {
     #[test]
     fn a_file_missing_from_the_active_save_is_named_under_saves() {
         let (data, library) = library_with_a_save_and_a_replay("missing-save-file");
-        fs::remove_file(library.active_dir().join(GT4.save_folder).join("garage")).unwrap();
-        let relative = Path::new("Saves").join("Active").join(GT4.save_folder).join("garage").display().to_string();
+        fs::remove_file(library.active_save_dir().unwrap().join("garage")).unwrap();
+        let relative = Path::new("Saves").join(DEFAULT).join(GT4.save_folder).join("garage").display().to_string();
         let message = prepare_card(&library, &data.join("runtime").join("card.ps2"), Language::fallback()).unwrap_err();
         assert!(message.contains(&format!("this file could not be read: {relative} (")), "{message}");
         let _ = fs::remove_dir_all(&data);
@@ -766,8 +760,8 @@ mod tests {
         let _ = fs::remove_dir_all(&data);
     }
 
-    fn active_item() -> Item {
-        Item { name: GT4.save_folder.into(), label: "Active save".into(), active: true, modified: String::new(), renamed: false, game: String::new(), empty: false }
+    fn active_item(name: &str) -> Item {
+        Item { name: name.into(), label: name.into(), active: true, modified: String::new(), game: String::new(), empty: false }
     }
 
     // The tests remove the folder instead of sending it to the Recycle Bin.
@@ -820,13 +814,30 @@ mod tests {
         let card = data.join("card.ps2");
         fs::write(&card, card_with(&[game_save(5), replay()])).unwrap();
         harvest_card(&library, &card).unwrap();
-        library.rename_save(GT4.save_folder, "My career").unwrap();
-        assert!(library.active_dir().join(gt4saves::library::NAME_FILE).is_file());
-        delete_with(&library, &active_item(), &data.join("no-runtime-card.ps2"), &remove_folder, &moves_here()).unwrap();
-        assert!(!library.active_dir().join(GT4.save_folder).exists(), "the save left the library");
-        assert!(!library.active_dir().join(gt4saves::library::NAME_FILE).exists(), "its display name is gone");
-        assert!(!names(&saves(&library).unwrap()).contains(&GT4.save_folder.to_string()));
+        library.rename_save(DEFAULT, "My career").unwrap();
+        delete_with(&library, &active_item("My career"), true, &data.join("no-runtime-card.ps2"), &remove_folder, &moves_here()).unwrap();
+        assert!(!library.save_dir("My career").exists(), "the save left the library");
+        // No save is left, so a new empty default save is the selected one.
+        let left = saves(&library).unwrap();
+        assert_eq!(names(&left), vec![DEFAULT.to_string()]);
+        assert!(left[0].active && left[0].empty);
         assert_eq!(replays(&library).unwrap().len(), 1, "replays are untouched");
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn deleting_a_save_that_is_not_selected_leaves_the_selection_alone() {
+        let data = scratch("delete-other");
+        let (_, library) = open_scratch(&data);
+        let source = data.join("kept.ps2");
+        fs::write(&source, card_with(&[game_save(2)])).unwrap();
+        import_path(&library, &source, Language::fallback()).unwrap();
+        let runtime_card = data.join("runtime.ps2");
+        fs::write(&runtime_card, card_with(&[game_save(8)])).unwrap();
+        let item = saves(&library).unwrap().into_iter().find(|item| item.name == "kept").unwrap();
+        delete_with(&library, &item, true, &runtime_card, &remove_folder, &moves_here()).unwrap();
+        assert_eq!(names(&saves(&library).unwrap()), vec![DEFAULT.to_string()]);
+        assert!(runtime_card.exists(), "the card of the selected save is not touched");
         let _ = fs::remove_dir_all(&data);
     }
 
@@ -838,7 +849,7 @@ mod tests {
         fs::create_dir_all(runtime_card.parent().unwrap()).unwrap();
         fs::write(&runtime_card, card_with(&[game_save(5), replay()])).unwrap();
         harvest_card(&library, &runtime_card).unwrap();
-        delete_with(&library, &active_item(), &runtime_card, &remove_folder, &moves_here()).unwrap();
+        delete_with(&library, &active_item(DEFAULT), true, &runtime_card, &remove_folder, &moves_here()).unwrap();
         assert!(!runtime_card.exists(), "the stale runtime card is moved away");
         let parked: Vec<String> = fs::read_dir(&library.paths().backups)
             .unwrap()
@@ -852,7 +863,7 @@ mod tests {
         let root: Vec<String> = rebuilt.iter().map(|node| node.name()).collect();
         assert!(!root.iter().any(|name| name == GT4.save_folder), "no game save on the next card: {root:?}");
         assert!(root.iter().any(|name| name == REPLAY), "the replay is still there: {root:?}");
-        assert!(!library.active_dir().join(GT4.save_folder).exists(), "and Play did not bring the save back");
+        assert!(!library.has_game_data(DEFAULT), "and Play did not bring the save back");
         let _ = fs::remove_dir_all(&data);
     }
 
@@ -866,15 +877,14 @@ mod tests {
         let card_before = card_with(&[game_save(5), replay()]);
         let runtime_card = other_drive_card(&data, &[game_save(5), replay()]);
         harvest_card(&library, &runtime_card).unwrap();
-        library.rename_save(GT4.save_folder, "My career").unwrap();
+        library.rename_save(DEFAULT, "My career").unwrap();
 
         let rename = |from: &Path, to: &Path| cross_drive_rename(&install, from, to);
         let file_ops = moves::MoveOps { rename: &rename, copy_file: &copy_file };
-        delete_with(&library, &active_item(), &runtime_card, &remove_folder, &file_ops).unwrap();
+        delete_with(&library, &active_item("My career"), true, &runtime_card, &remove_folder, &file_ops).unwrap();
 
         assert!(!runtime_card.exists(), "the card on the other drive is moved away, so nothing brings the save back");
-        assert!(!library.active_dir().join(GT4.save_folder).exists(), "the save left the library");
-        assert!(!library.active_dir().join(gt4saves::library::NAME_FILE).exists(), "its display name is gone");
+        assert!(!library.save_dir("My career").exists(), "the save left the library");
         let parked = parked_cards(&library, gt4saves::library::DELETE_BACKUP_SUFFIX);
         assert_eq!(parked.len(), 1, "{parked:?}");
         assert_eq!(fs::read(&parked[0]).unwrap(), card_before, "the card is kept whole, byte for byte");
@@ -883,7 +893,7 @@ mod tests {
         let rebuilt = Card::from_image(&fs::read(&runtime_card).unwrap()).unwrap().root().unwrap();
         let root: Vec<String> = rebuilt.iter().map(|node| node.name()).collect();
         assert!(!root.iter().any(|name| name == GT4.save_folder), "no game save on the next card: {root:?}");
-        assert!(!library.active_dir().join(GT4.save_folder).exists(), "and Play did not bring the save back");
+        assert!(!library.has_game_data(DEFAULT), "and Play did not bring the save back");
         let _ = fs::remove_dir_all(&data);
     }
 
@@ -896,13 +906,14 @@ mod tests {
 
         let rename = |from: &Path, to: &Path| cross_drive_rename(&install, from, to);
         let file_ops = moves::MoveOps { rename: &rename, copy_file: &copy_file };
-        let parked = new_save_with(&library, &runtime_card, &file_ops).unwrap();
+        let made = new_save_with(&library, &runtime_card, "New save", &file_ops).unwrap();
 
-        assert_eq!(parked, Some("Save 01".to_string()), "the old save went to a slot");
+        assert_eq!(made, "New save");
         assert!(!runtime_card.exists(), "the card on the other drive is moved away");
         assert_eq!(parked_cards(&library, gt4saves::library::NEW_SAVE_BACKUP_SUFFIX).len(), 1);
-        assert!(library.slot_dir("Save 01").join(GT4.save_folder).is_dir());
-        assert!(!library.active_dir().join(GT4.save_folder).exists(), "Active is empty, so the game starts a new profile");
+        assert!(library.has_game_data(DEFAULT), "the card's progress went to the save it belongs to, which stays");
+        assert_eq!(library.selected().unwrap().as_deref(), Some("New save"));
+        assert!(!library.has_game_data("New save"), "the new save is empty, so the game starts a new profile");
 
         prepare_card(&library, &runtime_card, Language::fallback()).unwrap();
         let rebuilt = Card::from_image(&fs::read(&runtime_card).unwrap()).unwrap().root().unwrap();
@@ -919,7 +930,7 @@ mod tests {
 
         let report = harvest_card(&library, &runtime_card).unwrap();
         assert!(report.added.contains(&GT4.save_folder.to_string()));
-        assert!(library.active_dir().join(GT4.save_folder).is_dir(), "the save is in the library, on its own drive");
+        assert!(library.game_data_dir(DEFAULT).is_dir(), "the save is in the library, on its own drive");
         assert!(library.replays_dir().join(REPLAY).is_dir());
 
         prepare_card(&library, &runtime_card, Language::fallback()).unwrap();
@@ -986,10 +997,10 @@ mod migration_tests {
         let save = old_save(&data);
         let dirs = DataDirs::new(&data);
         let user = UserDirs::new(data.join("Docs").join("Gran Turismo 4"), UserRootSource::Override);
-        let opened = open(&dirs, &user, &GT4, Some(&data)).unwrap();
+        let opened = open(&dirs, &user, &GT4, Some(&data), "Default save").unwrap();
         assert!(opened.notice.is_none());
         assert!(opened.log.iter().any(|line| line.contains("moved 3 files")), "{:?}", opened.log);
-        assert_eq!(saves(&opened.library).unwrap()[0].label, "Active save");
+        assert_eq!(saves(&opened.library).unwrap()[0].label, "Default save", "the old active save became the default save");
         // Play builds the card from the moved save.
         let card = dirs.runtime_card();
         prepare_card(&opened.library, &card, Language::fallback()).unwrap();
@@ -1011,7 +1022,7 @@ mod migration_tests {
         let blocked = data.join("blocked-docs");
         fs::write(&blocked, b"not a folder").unwrap();
         let user = UserDirs::new(blocked.join("Gran Turismo 4"), UserRootSource::AppData);
-        let opened = open(&dirs, &user, &GT4, Some(&data)).unwrap();
+        let opened = open(&dirs, &user, &GT4, Some(&data), "Default save").unwrap();
         assert_eq!(opened.user.root(), data.join("Gran Turismo 4"));
         assert!(opened.notice.is_some());
         assert_eq!(saves(&opened.library).unwrap().len(), 1, "the old save was moved to the fallback folder");
@@ -1025,11 +1036,11 @@ mod page_shape_tests {
 
     #[test]
     fn an_item_has_the_fields_the_page_reads() {
-        let item = Item { name: "Save 02".into(), label: "Save 02".into(), active: false, modified: "2026-10-21T12:00:00Z".into(), renamed: false, game: String::new(), empty: false };
+        let item = Item { name: "Save 02".into(), label: "Save 02".into(), active: false, modified: "2026-10-21T12:00:00Z".into(), game: String::new(), empty: false };
         let json = serde_json::to_value(&item).unwrap();
         assert_eq!(
             json,
-            serde_json::json!({ "id": "Save 02", "slot": "Save 02", "name": "Save 02", "active": false, "modified": "2026-10-21T12:00:00Z", "renamed": false, "game": "", "empty": false })
+            serde_json::json!({ "id": "Save 02", "slot": "Save 02", "name": "Save 02", "active": false, "modified": "2026-10-21T12:00:00Z", "game": "", "empty": false })
         );
         // A save of a game carries the game in its id, so the page's actions reach that game's library.
         let spec2 = Item { game: "spec2".into(), ..item };

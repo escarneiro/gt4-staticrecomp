@@ -11,12 +11,17 @@
  *   renderer_step: "checking" | "compiling" | "listing" | "downloading" | "installing" | "done" | "failed",
  *   renderer_choice: "coregs20" | "gsdx_fallback" | "",  (what setup decided for this PC)
  *   disc_name, problem, note            (note: GSdx could not be downloaded; the game cannot start yet)
+ *   save: {name, has_data} | null       (done only: the save the game's next Play uses, TASK-074)
  * }
  * Two games (TASK-101): a disc of the other game than the one asked for offers to install it as that game (js/games.js).
  * When another game is already installed the page also has "Back" to Home.
  * Flow: "Choose disc image" -> setup_choose_disc (Rust file picker and fast check) -> setup_start (copy, check,
  * prepare, renderer). A refused file shows its reason with "Choose another file". When setup is done the page
- * shows "Finish", which opens Home (it never starts the game). Commands: setup_choose_disc, setup_start, setup_cancel.
+ * shows "Finish", which opens Home (it never starts the game). Commands: setup_choose_disc, setup_start, setup_cancel,
+ * setup_import_save.
+ * TASK-074: when setup is done and the game's save holds no game data yet, the last step asks "new game or import?":
+ * "Start a new game" keeps the empty save setup made and opens Home; "Import a save…" (setup_import_save) imports a file
+ * and makes its save the one Play uses. A game whose save already holds data shows "Using <name>" and Finish.
  */
 (function (root) {
   "use strict";
@@ -93,7 +98,8 @@
   // Signature decides whether the page has to be rebuilt.
   function signature(setup) {
     return [setup.state, setup.step, Math.round((setup.progress || 0) * 100), setup.renderer_step || "", setup.renderer_choice || "",
-      Math.round((setup.bytes_done || 0) / 1e6), setup.problem || "", setup.note || "", setup.disc_name || ""].join("|");
+      Math.round((setup.bytes_done || 0) / 1e6), setup.problem || "", setup.note || "", setup.disc_name || "",
+      setup.save ? setup.save.name + ":" + !!setup.save.has_data : ""].join("|");
   }
 
   function gameName(setup) {
@@ -112,7 +118,9 @@
     var name = gameName(setup);
     switch (state) {
       case "done":
-        return [name ? GT4.t("setup.done_title_named", { game: name }) : GT4.t("setup.done_title"), GT4.t("setup.done_text")];
+        // TASK-074: while the save step asks "new game or import?", the text says so instead of "press Finish".
+        return [name ? GT4.t("setup.done_title_named", { game: name }) : GT4.t("setup.done_title"),
+          setup.save && !setup.save.has_data ? GT4.t("setup.done_save_text") : GT4.t("setup.done_text")];
       case "files_missing":
         return [GT4.t("setup.missing_title"), GT4.t("setup.missing_text")];
       case "checking":
@@ -197,6 +205,15 @@
         steps.push(row("0" + (index + 2), GT4.t(step.label), detail, status, pct, bytesText));
       });
     }
+    // TASK-074: the save the game uses, once setup is done. An empty one asks whether to start a new game or import a save.
+    var save = done && setup.save ? setup.save : null;
+    var askSave = !!(save && !save.has_data);
+    if (save) {
+      var number = "0" + (STEPS.length + 2);
+      steps.push(askSave
+        ? row(number, GT4.t("setup.step_save"), GT4.t("setup.save_question"), "active", null, null)
+        : row(number, GT4.t("setup.step_save"), GT4.t("setup.save_using", { name: save.name }), "ok", null, null));
+    }
 
     var problem = setup.problem || "";
     parts.problem.textContent = problem;
@@ -204,7 +221,11 @@
     parts.notice.textContent = setup.note || "";
     parts.notice.hidden = !(done && setup.note);
 
-    if (done) {
+    if (done && askSave) {
+      buttons.push({ label: GT4.t("setup.save_import"), run: importSave });
+      buttons.push({ label: GT4.t("setup.save_new"), primary: true, run: finishSetup });
+      hints.push({ key: "A", label: GT4.t("hint.select") });
+    } else if (done) {
       buttons.push({ label: GT4.t("setup.finish"), primary: true, run: finishSetup });
       hints.push({ key: "A", label: GT4.t("hint.finish"), run: finishSetup });
     } else if (running) {
@@ -285,6 +306,30 @@
     call("setup_start").then(function () {
       poll();
     }, function (err) {
+      GT4.ui.toast(GT4.errorText(err), true);
+      poll();
+    });
+  }
+
+  // TASK-074: imports a save file or card image and makes its save the one Play uses. A cancelled picker changes nothing.
+  var busyImporting = false;
+  function importSave() {
+    if (busyImporting) {
+      return;
+    }
+    busyImporting = true;
+    call("setup_import_save").then(function (status) {
+      busyImporting = false;
+      if (status) {
+        GT4.ui.toast(status);
+      }
+      // The Saves page reads its list again when it opens.
+      if (GT4.cache && GT4.cache.library) {
+        GT4.cache.library.saves = null;
+      }
+      poll();
+    }, function (err) {
+      busyImporting = false;
       GT4.ui.toast(GT4.errorText(err), true);
       poll();
     });

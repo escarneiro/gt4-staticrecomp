@@ -156,10 +156,11 @@ fn the_old_library_is_copied_verified_and_parked() {
 
     // The new library reads the moved items.
     let library = Library::open_paths(&fixture.library_paths(), GT4).unwrap();
-    assert_eq!(library.active_save().unwrap(), Some(GT4_GAME_SAVE.to_string()));
-    assert_eq!(library.slots().unwrap(), vec!["Save 01".to_string()]);
+    // The old layout is converted when the library opens: Active becomes the selected "Default save", the slot keeps its name.
+    assert_eq!(library.active_save().unwrap(), Some("Default save".to_string()));
+    assert_eq!(library.saves().unwrap(), vec!["Default save".to_string(), "Save 01".to_string()]);
     assert_eq!(library.replays().unwrap(), vec![REPLAY.to_string()]);
-    let active = folder::import_item(&library.active_dir().join(GT4_GAME_SAVE)).unwrap();
+    let active = folder::import_item(&library.active_save_dir().unwrap()).unwrap();
     assert!(gt4saves::card::same_contents(std::slice::from_ref(&active), std::slice::from_ref(&game_save(1))));
     assert!(library.active_backup_dir().join(GT4_GAME_SAVE).is_dir(), "harvest copies moved to Saves\\.backup");
 
@@ -208,7 +209,7 @@ fn the_old_folders_are_parked_with_the_mover_given_and_a_failure_keeps_their_dat
 fn empty_new_folders_made_by_an_earlier_start_do_not_block_the_move() {
     let fixture = Fixture::new("empty-new");
     fixture.old_library();
-    Library::open_paths(&fixture.library_paths(), GT4).unwrap(); // creates empty Saves\Active, Saves\.backup, Replays
+    Library::open_paths(&fixture.library_paths(), GT4).unwrap(); // creates an empty default save, selected.txt, Saves\.backup, Replays
     assert!(matches!(fixture.run(&copy_file), Outcome::Migrated { .. }));
 }
 
@@ -217,7 +218,7 @@ fn both_libraries_with_saves_are_never_merged() {
     let fixture = Fixture::new("conflict");
     fixture.old_library();
     let library = Library::open_paths(&fixture.library_paths(), GT4).unwrap();
-    folder::export_item(&library.active_dir(), &game_save(9)).unwrap();
+    folder::export_item(&library.active_dir().unwrap(), &game_save(9)).unwrap();
     let new_before = snapshot(&fixture.documents_root);
     let old_before = snapshot(&fixture.data.join("library"));
 
@@ -295,7 +296,7 @@ fn a_card_harvested_into_the_documents_library_builds_the_next_card() {
     library.write_card_image(&runtime_card, &played).unwrap();
     let report = library.harvest(&fs::read(&runtime_card).unwrap()).unwrap();
     assert!(report.replaced_active);
-    let active = folder::import_item(&fixture.documents_root.join("Saves").join("Active").join(GT4_GAME_SAVE)).unwrap();
+    let active = folder::import_item(&fixture.documents_root.join("Saves").join("Default save").join(GT4_GAME_SAVE)).unwrap();
     assert!(gt4saves::card::same_contents(std::slice::from_ref(&active), std::slice::from_ref(&game_save(5))));
     // The runtime card's previous image went to the AppData backups, never to Documents.
     assert!(fs::read_dir(fixture.data.join("library").join("backups")).unwrap().count() >= 2);

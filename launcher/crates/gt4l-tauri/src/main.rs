@@ -237,6 +237,7 @@ fn main() {
             commands::stop_game,
             commands::saves_list,
             commands::saves_import,
+            commands::setup_import_save,
             commands::saves_activate,
             commands::saves_delete,
             commands::saves_new,

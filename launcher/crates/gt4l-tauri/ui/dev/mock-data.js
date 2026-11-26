@@ -590,7 +590,8 @@
       saves: [
         { slot: "Save 01", name: "Save 01", modified: "2026-10-16T06:31:00", active: true },
         { slot: "Save 02", name: "Save 02", modified: "2026-10-12T22:14:00", active: false },
-        { slot: "Save 03", name: "Save 03", modified: "2026-09-03T19:02:00", active: false }
+        { slot: "Save 03", name: "Save 03", modified: "2026-09-03T19:02:00", active: false },
+        { slot: "New save", name: "New save", modified: "", active: false, empty: true }
       ],
       replays: [
         { id: "01", name: "Replay 01", modified: "2026-10-16T21:40:00" },
@@ -612,7 +613,7 @@
     ["gt4", "spec2"].forEach(function (gameId) {
       libraries[gameId].saves.forEach(function (save) {
         rows.push({ id: gameId + ":" + save.slot, slot: save.slot, name: save.name, modified: save.modified,
-          active: !!save.active, renamed: !!save.renamed, game: gameId });
+          active: !!save.active, empty: !!save.empty, game: gameId });
       });
     });
     return rows;
@@ -643,6 +644,11 @@
     }
     var target = setupGame || (view.any_installed ? selectedGame : null);
     snapshot.game = target ? { id: target, name: gameById(target).name } : null;
+    // TASK-074: the save the game uses, once setup is done (?setupsave=empty asks "new game or import?").
+    var mockSave = target ? libraries[target].saves.filter(function (save) { return save.active; })[0] : null;
+    snapshot.save = snapshot.state === "done" && mockSave
+      ? { name: mockSave.name, has_data: query.get("setupsave") === "empty" ? false : !mockSave.empty }
+      : null;
     return { setup: snapshot, game_running: gameRunning, selected_game: view.selected, language: mockLanguage,
       any_installed: view.any_installed, games: view.games,
       game_files: "C:\\Program Files\\GT4Recomp\\data\\games\\" + selectedGame + "\\disc",
@@ -909,14 +915,25 @@
         return libraryView("saves");
       }
       case "saves_new": {
-        // The active save of that game is parked as a slot; its next Play starts a new profile (the real launcher keeps it).
+        // An empty save of that game, named by the player, becomes the marked one; the other saves stay.
         var newGame = args.game || selectedGame;
+        var newName = String(args.name || "").trim() || "New save";
         libraries[newGame].saves.forEach(function (save) {
           save.active = false;
         });
+        libraries[newGame].saves.push({ slot: newName, name: newName, modified: "", active: true, empty: true });
+        libraries[newGame].saves.sort(function (a, b) { return a.name.toLowerCase() < b.name.toLowerCase() ? -1 : 1; });
         var fresh = libraryView("saves");
-        fresh.status = gameById(newGame).name + ": Started a new save. The old one is kept as a slot.";
+        fresh.status = gameById(newGame).name + ": Started a new save, " + newName + ".";
         return fresh;
+      }
+      case "setup_import_save": {
+        var importGame = setupGame || selectedGame;
+        libraries[importGame].saves.forEach(function (save) {
+          save.active = false;
+        });
+        libraries[importGame].saves.push({ slot: "imported-card", name: "imported-card", modified: "2026-11-26T10:00:00", active: true });
+        return "imported-card will be used the next time you play.";
       }
       case "saves_rename": {
         var renamedSave = saveOf(args.id);
@@ -928,8 +945,9 @@
         if (!cleaned) {
           throw new Error("Type a name with letters or numbers.");
         }
+        // TASK-074: the save's folder is renamed with it, so its id changes too.
         renamedSave.name = cleaned;
-        renamedSave.renamed = true;
+        renamedSave.slot = cleaned;
         var renamedView = libraryView("saves");
         renamedView.status = "Renamed to " + cleaned + ".";
         return renamedView;

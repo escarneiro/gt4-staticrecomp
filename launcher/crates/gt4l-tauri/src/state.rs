@@ -283,7 +283,9 @@ impl AppState {
         for game in games::GAMES {
             // Only Gran Turismo 4 has a library from before 1.0.0 to take over.
             let old_root = if game.id == GT4.id { pre_1_0_root.as_deref() } else { None };
-            let opened = saves::open(&dirs.for_game(game), &user.for_game(game), game, old_root)?;
+            // TASK-074: the empty save made when a game has none carries the name in the launcher's language.
+            let default_name = gt4l_core::messages::text("saves.default_name", language_of_settings(&config.settings));
+            let opened = saves::open(&dirs.for_game(game), &user.for_game(game), game, old_root, default_name)?;
             for line in &opened.log {
                 log(&dirs, &format!("{}: {line}", game.id));
             }

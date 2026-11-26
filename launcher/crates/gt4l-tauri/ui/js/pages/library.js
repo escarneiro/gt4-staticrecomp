@@ -1,12 +1,14 @@
 /*
  * Saves and Replays tabs. One list component, two commands sets:
  *   saves:   saves_list, saves_import, saves_activate({id}), saves_delete({id}),
- *            saves_new, saves_export({id}), saves_rename({id, name})
+ *            saves_new({game, name}), saves_export({id}), saves_rename({id, name})
  *   replays: replays_list, replays_import, replays_delete({id})
- * Item = {id (library name, sent back to activate/delete/export/rename), name (shown: the display name when renamed),
- * modified (ISO 8601), active (saves only), renamed (saves only)}. The list result also has `folder`: the
- * user data folder that holds the files (%APPDATA%\GT4Recomp\Saves or \Replays), shown with
- * "Open folder" (open_saves_folder / open_replays_folder).
+ * Item = {id (game and library name, sent back to activate/delete/export/rename), name (shown), slot (the library name),
+ * modified (ISO 8601), active (saves only), empty (saves only: no game data yet), game}. The list result also has
+ * `folder`: the user data folder that holds the files (Saves or Replays), shown with "Open folder"
+ * (open_saves_folder / open_replays_folder).
+ * TASK-074: the Saves list works like the memory cards of an emulator. Every folder of the Saves folder is a save, named
+ * like its folder; the radio marks the save each game's next Play uses, and choosing another moves nothing.
  * saves_import / replays_import / saves_export return the new list, or null when cancelled.
  *
  * Keys on a focused row: A = select (saves: make active), Y = make active
@@ -78,23 +80,9 @@
       return active && active.dataset && active.dataset.itemId ? active : null;
     }
 
-    // The slot the launcher parks the current save in: the next number after the highest one of that game ("Save 02").
-    function nextSlotLabel(gameId) {
-      var highest = 0;
-      items.forEach(function (item) {
-        if (item.game !== gameId) {
-          return;
-        }
-        var match = /^Save (\d+)$/.exec(item.slot || "");
-        if (match) {
-          highest = Math.max(highest, parseInt(match[1], 10));
-        }
-      });
-      return "Save " + String(highest + 1).padStart(2, "0");
-    }
-
-    // New save: the current save of the game is kept in a new slot and that game's next Play starts a new profile. When
-    // two games are installed the player says which one first; otherwise it is the game the page shows.
+    // New save: an empty save, named by the player, becomes the marked one, so that game's next Play starts a new profile.
+    // The other saves stay as they are. When two games are installed the player says which one first; otherwise it is the
+    // game the page shows.
     function newSave() {
       GT4.backend.call("games_list", {}).then(function (view) {
         var games = (view.games || []).filter(function (game) { return game.installed; });
@@ -117,36 +105,48 @@
     function askNewSave(gameId, games) {
       var game = games.filter(function (entry) { return entry.id === gameId; })[0];
       var gameName = game ? game.name : "";
-      var hasActive = items.some(function (item) { return item.active && item.game === gameId; });
-      GT4.ui.openDialog({
+      var input = h("input", {
+        class: "modal-input",
+        type: "text",
+        maxlength: "40",
+        value: GT4.t("library.new_save"),
+        "aria-label": GT4.t("library.new_save_name_label")
+      });
+      var dialog = null;
+      function submit() {
+        GT4.backend.call("saves_new", { game: gameId, name: input.value }).then(function (result) {
+          apply(result, result && result.status ? result.status : "");
+        }, function (err) {
+          GT4.ui.toast(GT4.errorText(err), true);
+        });
+      }
+      dialog = GT4.ui.openDialog({
         title: GT4.t("library.new_save_title"),
-        text: (gameName ? gameName + ". " : "") + (hasActive
-          ? GT4.t("library.new_save_text_kept", { slot: nextSlotLabel(gameId) })
-          : GT4.t("library.new_save_text_none")),
+        text: (gameName ? gameName + ". " : "") + GT4.t("library.new_save_text"),
+        body: input,
         buttons: [
           { label: GT4.t("common.cancel") },
-          {
-            label: GT4.t("library.new_save_confirm"),
-            primary: true,
-            run: function () {
-              GT4.backend.call("saves_new", { game: gameId }).then(function (result) {
-                apply(result, result && result.status ? result.status : "");
-              }, function (err) {
-                GT4.ui.toast(GT4.errorText(err), true);
-              });
-            }
-          }
+          { label: GT4.t("library.new_save_confirm"), primary: true, run: submit }
         ]
       });
+      input.addEventListener("keydown", function (event) {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          submit();
+          dialog.close();
+        }
+      });
+      input.focus({ preventScroll: true });
+      input.select();
     }
 
-    // Rename: a text box (up to 40 characters). Enter confirms; the folder name of the save does not change.
+    // Rename: a text box (up to 40 characters). Enter confirms; the save's folder is renamed with it (TASK-074).
     function renameItem(item) {
       var input = h("input", {
         class: "modal-input",
         type: "text",
         maxlength: "40",
-        value: item.renamed ? item.name : "",
+        value: item.name || "",
         "aria-label": GT4.t("library.rename_label"),
         placeholder: item.slot || item.id
       });
@@ -190,10 +190,7 @@
 
     function removeItem(id) {
       var target = items.filter(function (item) { return item.id === id; })[0];
-      if (target && target.empty) {
-        return; // TASK-074: the save the game creates at the next Play holds nothing to delete yet.
-      }
-      // The active save goes to the Recycle Bin too, and the next Play starts a new profile: say so.
+      // The marked save goes to the Recycle Bin too, and the first save left is used instead: say so.
       var text = target && target.active && kindName === "saves" ? GT4.t("library.delete_active_save_text") : kind.removeText;
       GT4.ui.openDialog({
         title: kind.removeTitle,
@@ -243,8 +240,8 @@
       if (item.active) {
         nameNode.appendChild(h("small", { text: GT4.t("library.next_play") }));
       }
-      // TASK-074: every save is shown by its own name; the folder it sits in (Save NN) is not shown, since it is not the
-      // save's identity (the active save and a slot swap folders). An empty save is the one the game creates at the next Play.
+      // TASK-074: every save is shown by its name, which is its folder's name. An empty save holds no game data yet: the
+      // game creates them at its next Play.
       children.push(nameNode);
       children.push(h("span", { class: "date", text: item.empty ? GT4.t("library.new_game_note") : GT4.ui.formatDate(item.modified) }));
       var actions = [];
@@ -262,7 +259,7 @@
           }
         }, pencilIcon()));
       }
-      // TASK-074: an empty save has nothing to export or delete yet.
+      // TASK-074: an empty save has nothing to export yet (it can still be renamed or deleted).
       if (kindName === "saves" && !item.empty) {
         actions.push(h("button", {
           class: "iconbtn",
@@ -277,7 +274,7 @@
           }
         }, exportIcon()));
       }
-      if (!item.empty) actions.push(h("button", {
+      actions.push(h("button", {
         class: "iconbtn del",
         type: "button",
         "aria-label": GT4.t("library.aria_delete", { name: item.name || item.id }),

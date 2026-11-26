@@ -46,7 +46,7 @@ fn a_card_with_saves_of_several_games_lists_each_one() {
     // Import keeps the Gran Turismo 4 items and names the other games' saves as skipped.
     let library = Library::open(&scratch("several-games"), GT4).unwrap();
     let report = library.import_card_image(&image).unwrap();
-    assert_eq!(report.added, vec!["Save 01".to_string(), "BASCUS-97328R0001".to_string()]);
+    assert_eq!(report.added, vec!["Imported save".to_string(), "BASCUS-97328R0001".to_string()]);
     assert_eq!(report.skipped.len(), 2, "{:?}", report.skipped);
 }
 
@@ -278,7 +278,7 @@ fn an_8_mb_image_with_a_16_mb_header_reads_as_8_mb_and_nothing_past_the_end_is_f
     assert_eq!(names(&card.root().unwrap()), names(&Card::from_image(&base).unwrap().root().unwrap()));
     let library = Library::open(&scratch("oversized-header"), GT4).unwrap();
     let report = library.import_card_image(&oversized).unwrap();
-    assert_eq!(report.added, vec!["Save 01".to_string(), "BASCUS-97328R0002".to_string()]);
+    assert_eq!(report.added, vec!["Imported save".to_string(), "BASCUS-97328R0002".to_string()]);
 
     // The root directory's chain continued to a cluster that only a 16 MB card has: refused, never read.
     let mut past_the_end = oversized.clone();

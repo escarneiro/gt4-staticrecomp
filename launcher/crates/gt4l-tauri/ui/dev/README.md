@@ -40,10 +40,11 @@ Arguments are the payload object shown. Errors are strings or Error objects; the
 
 | Command | Payload | Returns |
 |---|---|---|
-| `app_state` | none | `{setup: {state, step, progress, bytes_done, bytes_total, renderer_step, disc_name, problem, note, game}, game_running: bool, game_files, selected_game, any_installed, games: [row]}`; see "Setup states" below. `setup` describes the game being set up, else the selected one (`game` is `{id, name}`, or `null` on the very first start: the disc decides); `games` has the rows of `games_list` |
+| `app_state` | none | `{setup: {state, step, progress, bytes_done, bytes_total, renderer_step, disc_name, problem, note, game, save}, game_running: bool, game_files, selected_game, any_installed, games: [row]}`; see "Setup states" below. `setup` describes the game being set up, else the selected one (`game` is `{id, name}`, or `null` on the very first start: the disc decides); `save` is `{name, has_data}` of the save the game's next Play uses once `state` is `done` (TASK-074: the wizard asks "new game or import?" while `has_data` is false), else `null`; `games` has the rows of `games_list` |
 | `setup_choose_disc` | `{game?}` | `{path, serial, version, name, game, gameName, mismatch, requested}` when the file is accepted, `null` when the picker was cancelled; a refused file is an error string (the reason), and `app_state` then says `wrong_disc`. The disc decides the game (`game`: `gt4` or `spec2`). `game` in the payload is the game the page asked for; when the disc is the other game `mismatch` is true and the page offers to install it as that game (nothing is installed until `setup_start`) |
 | `setup_start` | none | none; called by the page right after `setup_choose_disc` accepted a file (and by "Try again") |
 | `setup_cancel` | none | none; the copy and the staging folder are removed, `app_state` says `failed` with "Setup was cancelled" |
+| `setup_import_save` | none | the status text, or `null` when the picker was cancelled (TASK-074). Imports a save file or card image like `saves_import`, then makes its save the one the set-up game's next Play uses; the empty save setup made is removed. A file with no save of that game is an error string and selects nothing |
 | `play` | none | none |
 | `stop_game` | none | none |
 | `get_settings_table` | none | `{max_upscale: int, rows: [row]}` |
@@ -75,13 +76,15 @@ Arguments are the payload object shown. Errors are strings or Error objects; the
 | `list_wheel_presets` | none | `[{name, device_name, preset, problem}]` (`config\wheel-presets\<name>.toml`, the `wheel.toml` format) |
 | `save_wheel_preset` | `{name}` | the list; letters, digits, spaces and `- _ ( ) . +`, at most 48 characters |
 | `delete_wheel_preset` | `{name}` | the list (the page asks first) |
-| `saves_list` | none | `{items: [{id, name, modified, active}]}` |
+| `saves_list` | none | `{items: [{id, slot, name, modified, active, empty, game}]}`. TASK-074: one row per folder of each game's `Saves` folder (the folder name is the save name, `id` is `<game>:<name>`); `active` is the save the next Play uses (`Saves/selected.txt`); `empty` is a save with no game data yet. A game with no save gets an empty one ("Default save") |
 | `saves_import` | `{game}` | `{items, game, gameName, status, folder}` of the page's game, or `null` when the picker is cancelled. `game` is required: a save file does not say which game it is from (`gt4saves::game_of_save` finds no rule), so the page asks first and a call without it is refused |
 | `games_list` | none | `{selected, any_installed, games: [{id, name, installed, damaged, reason, selected, disc_name, folder, size_bytes, image_path, image_bytes}]}` (TASK-101) |
 | `select_game` | `{id}` | the `games_list` view; the page's choice (home, Saves, Play); the stored choice changes when a game starts |
 | `games_remove` | `{id}` | the `games_list` view; deletes the disc copy and the prepared files of that game only, never its saves or replays (the page asks first) |
-| `saves_activate` | `{id}` | `{items}` |
-| `saves_delete` | `{id}` | `{items}` (the UI confirms first) |
+| `saves_activate` | `{id}` | `{items, status}`; marks the save the next Play uses. Nothing moves: the card of the last run is harvested into the save marked before and set aside. Refused while the game runs |
+| `saves_new` | `{game, name}` | `{items, status}`; an empty save named `name` (made unique) becomes the marked one; the other saves stay. Refused while the game runs |
+| `saves_rename` | `{id, name}` | `{items, status}`; renames the save's folder (40 characters at most); the mark follows it |
+| `saves_delete` | `{id}` | `{items}` (the UI confirms first); deleting the marked save marks the first one left (a new empty default save when none is left) |
 | `replays_list` | none | `{items: [{id, name, modified}]}` |
 | `replays_import` | `{game}` | `{items, game, gameName, status, folder}` or `null`; `game` required like `saves_import` |
 | `replays_delete` | `{id}` | `{items}` (the UI confirms first) |

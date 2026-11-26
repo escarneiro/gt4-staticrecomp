@@ -24,6 +24,7 @@
     "allow-cancel-shader-prepare",
     "allow-saves-list",
     "allow-saves-import",
+    "allow-setup-import-save",
     "allow-saves-activate",
     "allow-saves-delete",
     "allow-saves-new",

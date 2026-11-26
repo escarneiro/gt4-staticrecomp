@@ -57,6 +57,16 @@ fn setup_subject(state: &AppState) -> &'static Game {
     }
 }
 
+/// TASK-074: `{name, has_data}` of the save the next Play of `game` uses. The setup wizard asks "new game or import?" while
+/// the save holds no game data.
+fn setup_save_view(state: &AppState, game: &'static Game) -> Value {
+    let library = state.library_of(game);
+    match library.ensure_selected() {
+        Ok(name) => json!({ "name": name, "has_data": library.has_game_data(&name) }),
+        Err(_) => Value::Null,
+    }
+}
+
 /// The image name the disc a game was set up from was checked as, from its receipt (empty when there is none).
 fn installed_image_name(state: &AppState, game: &'static Game) -> String {
     let dirs = state.game_dirs(game);
@@ -201,6 +211,8 @@ pub fn app_state_of(state: &AppState) -> Value {
             "problem": problem,
             "note": note,
             "game": target,
+            // TASK-074: the save the game set up will use, for the wizard's last question (new game or import).
+            "save": if screen == "done" { setup_save_view(state, subject) } else { Value::Null },
         },
         "game_running": state.game_child.is_some(),
         "game_files": game_files_folder(state, state.selected).display().to_string(),
@@ -1040,26 +1052,18 @@ fn saves_view(state: &AppState) -> Result<LibraryView, String> {
     })
 }
 
-/// The saves of every game in one list (TASK-101 item 2): each game's saves in slot order, each tagged with its game id.
+/// The saves of every game in one list (TASK-101 item 2): each game's saves in name order, each tagged with its game id.
+/// TASK-074: a game that is not installed shows only the saves that hold game data (its library still has its empty
+/// default save, which would mean nothing to the player there).
 fn saves_items(state: &AppState) -> Result<Vec<Item>, String> {
     let mut items = Vec::new();
     let installed = state.installed_games();
-    let language = state::language_of(state);
     for &game in games::GAMES {
-        // TASK-074: an installed game always shows its saves by name, and the save its next Play uses, even before the
-        // game wrote it (the default save of a new install).
         let set_up = installed.contains(&game);
-        if set_up {
-            match saves::name_unnamed(state.library_of(game), language) {
-                Ok(written) => {
-                    for (place, name) in written {
-                        state::log(&state.dirs, &format!("saves: {} {place} named \"{name}\"", game.id));
-                    }
-                }
-                Err(message) => state::log_warn(&state.dirs, &format!("saves: {} names not written: {message}", game.id)),
+        for mut item in saves::saves(state.library_of(game))? {
+            if !set_up && item.empty {
+                continue;
             }
-        }
-        for mut item in saves::saves_with(state.library_of(game), set_up)? {
             item.game = game.id.to_string();
             items.push(item);
         }
@@ -1110,6 +1114,71 @@ pub fn replays_list_of(shared: &Shared) -> Result<LibraryView, String> {
 #[tauri::command]
 pub async fn saves_import(app: AppHandle, game: Option<String>, shared: State<'_, Shared>) -> Result<Option<LibraryView>, String> {
     import_with_picker(app, shared.inner().clone(), Kind::Saves, game).await
+}
+
+/// TASK-074: `setup_import_save()`: the setup wizard's "Import a save": picks a save file or card image and imports it like
+/// the Saves page does, then makes the imported save of the game being set up the one its next Play uses (the empty save
+/// setup made is removed when nothing was written into it). Returns the status text, or null when the picker was
+/// cancelled.
+#[tauri::command]
+pub async fn setup_import_save(app: AppHandle, shared: State<'_, Shared>) -> Result<Option<String>, String> {
+    let shared = shared.inner().clone();
+    let language = state::language_of(&lock(&shared));
+    tauri::async_runtime::spawn_blocking(move || {
+        let picked = app
+            .dialog()
+            .file()
+            .set_title(messages::text("saves.import_title", language))
+            .add_filter(messages::text("saves.import_filter", language), &["psu", "ps2", "mcd", "bin", "card"])
+            .blocking_pick_file();
+        let Some(picked) = picked else {
+            return Ok(None);
+        };
+        let path = picked.into_path().map_err(|error| error.to_string())?;
+        setup_import_save_of(&shared, &path).map(Some)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// The import behind `setup_import_save` for a picked path (tests). Refused while a game runs.
+pub fn setup_import_save_of(shared: &Shared, path: &Path) -> Result<String, String> {
+    let mut state = lock(shared);
+    let language = state::language_of(&state);
+    if state.game_child.is_some() {
+        return Err(messages::text("saves.game_running", language).to_string());
+    }
+    let game = setup_subject(&state);
+    let file_name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    let libraries: Vec<(&'static Game, &Library)> = games::GAMES.iter().map(|game| (*game, state.library_of(game))).collect();
+    let outcome = match panic::catch_unwind(AssertUnwindSafe(|| saves::import_path(&libraries, path, language))) {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(message)) => {
+            state::log_error(&state.dirs, &format!("setup: import of {file_name} refused: {message}"));
+            return Err(message);
+        }
+        Err(_) => {
+            state::log_error(&state.dirs, &format!("setup: import of {file_name} stopped by an internal error"));
+            return Err(messages::text("saves.import_crashed", language).to_string());
+        }
+    };
+    let summary = saves::import_summary(&outcome, game, language);
+    let report = outcome.per_game.iter().find(|(owner, _)| owner.id == game.id).map(|(_, report)| report);
+    let card = state.game_dirs(game).runtime_card();
+    let chosen = match report {
+        Some(report) => saves::adopt_imported(state.library_of(game), report, &card)?,
+        None => None,
+    };
+    let Some(chosen) = chosen else {
+        // The file held no save of this game (only replays, or saves of the other game): say so, nothing is selected.
+        let text = messages::render("setup.save_import_none", language, &[("game", game.display_name), ("summary", &summary)]);
+        state::log(&state.dirs, &format!("setup: import of {file_name}: {summary} (no {} save to use)", game.id));
+        state.saves_status = summary;
+        return Err(text);
+    };
+    state::log(&state.dirs, &format!("setup: import of {file_name}: {summary}; {} uses \"{chosen}\"", game.id));
+    state.saves_status = summary;
+    Ok(messages::render("saves.selected", language, &[("name", &chosen)]))
 }
 
 #[tauri::command]
@@ -1193,7 +1262,8 @@ pub fn import_into_game(shared: &Shared, path: &Path, kind: Kind, page: &'static
     }
 }
 
-/// Makes a save the one the next start uses. The save that was active moves to a new slot.
+/// Makes a save the one the next start uses (TASK-074: nothing moves; the card of the last run is harvested and set aside
+/// first, see [`saves::activate`]). Refused while the game runs.
 #[tauri::command]
 pub fn saves_activate(id: String, shared: State<'_, Shared>) -> Result<LibraryView, String> {
     saves_activate_of(id, shared.inner())
@@ -1211,20 +1281,26 @@ pub fn saves_activate_of(id: String, shared: &Shared) -> Result<LibraryView, Str
     if item.active {
         return saves_view(&state);
     }
-    saves::activate(library, &name)?;
-    state.saves_status = format!("{} will be used the next time you play.", item.label);
+    if state.game_child.is_some() {
+        return Err(messages::text("saves.game_running", language).to_string());
+    }
+    let card = state.game_dirs(game).runtime_card();
+    let selected = saves::activate(state.library_of(game), &name, &card)?;
+    state::log(&state.dirs, &format!("saves: {} selected \"{selected}\"", game.id));
+    state.saves_status = messages::render("saves.selected", language, &[("name", &selected)]);
     saves_view(&state)
 }
 
-/// `saves_new({game})`: starts a new save for `game` (the page's game when it names none). The active save of that game is
-/// kept as a new `Save NN`; the next Play of that game starts a new profile. Refused while a game runs. The page asks first,
-/// and asks which game when two are installed.
+/// `saves_new({game, name})`: starts a new save for `game` (the page's game when it names none): an empty save named `name`
+/// (the translated "New save" when it is missing or empty) becomes the selected one, and the next Play of that game starts
+/// a new profile. The other saves stay as they are. Refused while a game runs. The page asks first (with the name), and
+/// asks which game when two are installed.
 #[tauri::command]
-pub fn saves_new(game: Option<String>, shared: State<'_, Shared>) -> Result<LibraryView, String> {
-    saves_new_of(game, shared.inner())
+pub fn saves_new(game: Option<String>, name: Option<String>, shared: State<'_, Shared>) -> Result<LibraryView, String> {
+    saves_new_of(game, name, shared.inner())
 }
 
-pub fn saves_new_of(game: Option<String>, shared: &Shared) -> Result<LibraryView, String> {
+pub fn saves_new_of(game: Option<String>, name: Option<String>, shared: &Shared) -> Result<LibraryView, String> {
     let mut state = lock(shared);
     let language = state::language_of(&state);
     if state.game_child.is_some() {
@@ -1232,11 +1308,12 @@ pub fn saves_new_of(game: Option<String>, shared: &Shared) -> Result<LibraryView
     }
     let game = page_game(game.as_deref(), state.selected);
     let card = state.game_dirs(game).runtime_card();
-    let parked = saves::new_save(state.library_of(game), &card)?;
-    let text = match parked {
-        Some(slot) => messages::render("saves.new_kept", language, &[("slot", &slot)]),
-        None => messages::text("saves.new_started", language).to_string(),
-    };
+    let wanted = name.filter(|name| !name.trim().is_empty()).unwrap_or_else(|| messages::text("saves.new_save_name", language).to_string());
+    let made = saves::new_save(state.library_of(game), &card, &wanted).map_err(|error| {
+        if error.contains("the name is empty") { messages::text("saves.name_empty", language).to_string() } else { error }
+    })?;
+    state::log(&state.dirs, &format!("saves: {} new save \"{made}\" selected", game.id));
+    let text = messages::render("saves.new_started_named", language, &[("name", &made)]);
     state.saves_status = format!("{}: {text}", game.display_name);
     saves_view(&state)
 }
@@ -1274,7 +1351,7 @@ pub async fn saves_export(app: AppHandle, id: String, shared: State<'_, Shared>)
     .map_err(|error| error.to_string())?
 }
 
-/// `saves_rename({id, name})`: gives a save a display name (at most 40 characters). The folder name stays.
+/// `saves_rename({id, name})`: renames a save (at most 40 characters). TASK-074: the save's folder is renamed with it.
 #[tauri::command]
 pub fn saves_rename(id: String, name: String, shared: State<'_, Shared>) -> Result<LibraryView, String> {
     saves_rename_of(id, name, shared.inner())
@@ -1330,7 +1407,7 @@ fn delete_item(id: &str, shared: &Shared, kind: Kind) -> Result<LibraryView, Str
     }
     let card = state.game_dirs(game).runtime_card();
     let library = state.library_of(game);
-    let result = saves::delete(library, &item, &card);
+    let result = saves::delete(library, &item, matches!(kind, Kind::Saves), &card);
     let status = match result {
         Ok(()) => format!("{} moved to the Recycle Bin.", item.label),
         Err(message) => message,

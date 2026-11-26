@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::library::{ACTIVE_BACKUP_FOLDER, ACTIVE_FOLDER};
+use crate::library::{ACTIVE_BACKUP_FOLDER, ACTIVE_FOLDER, LAYOUT_MARKER, SELECTED_FILE};
 use crate::names::SaveNames;
 
 /// Schema of the marker file.
@@ -166,6 +166,19 @@ fn files_under(folder: &Path) -> io::Result<Vec<PathBuf>> {
     }
     files.sort();
     Ok(files)
+}
+
+/// TASK-074: the files the library itself keeps at the top of the saves folder (which save is selected, the layout
+/// marker). A library opened by an earlier start holds them and no save, so they do not make the new library "used".
+const BOOKKEEPING_FILES: &[&str] = &[SELECTED_FILE, LAYOUT_MARKER, ".selected.tmp"];
+
+/// Number of the player's files under the saves and replays folders: the library's own bookkeeping files at the top of
+/// the saves folder do not count.
+fn count_player_files(saves: &Path, replays: &Path) -> io::Result<usize> {
+    let bookkeeping = |path: &PathBuf| {
+        path.parent() == Some(saves) && path.file_name().is_some_and(|name| BOOKKEEPING_FILES.iter().any(|kept| name == *kept))
+    };
+    Ok(files_under(saves)?.iter().filter(|path| !bookkeeping(path)).count() + files_under(replays)?.len())
 }
 
 /// Number of files under the folders.
@@ -319,7 +332,7 @@ pub fn migrate(
     if old_files == 0 {
         return Outcome::NothingToMigrate;
     }
-    let new_files = match count_files(&[targets.saves.clone(), targets.replays.clone()]) {
+    let new_files = match count_player_files(&targets.saves, &targets.replays) {
         Ok(count) => count,
         Err(error) => return record(marker, Outcome::Failed(format!("new library unreadable: {error}")), sources, targets, stamp),
     };
@@ -385,7 +398,11 @@ fn copy_and_swap(
             return Err(error);
         }
     }
-    // Swap in: the targets hold no file (checked before), so only empty folders are removed.
+    // Swap in: the targets hold no file of the player (checked before), so only the library's bookkeeping files and empty
+    // folders are removed. The moved library is of the old layout; the library converts it when it opens.
+    for kept in BOOKKEEPING_FILES {
+        let _ = fs::remove_file(targets.saves.join(kept));
+    }
     for target in [&targets.saves, &targets.replays] {
         if let Err(error) = remove_empty_tree(target) {
             rollback();

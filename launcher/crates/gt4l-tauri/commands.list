@@ -13,6 +13,7 @@ use_coregs20
 setup_choose_disc
 setup_start
 setup_cancel
+setup_import_save
 play
 first_start_hint
 stop_game

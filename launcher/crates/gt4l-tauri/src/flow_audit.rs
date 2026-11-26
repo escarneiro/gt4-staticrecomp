@@ -1879,14 +1879,14 @@ fn the_active_save_cannot_be_deleted_while_the_game_runs() {
     let (root, _dirs, _pins, shared) = new_install("delete-active-game-running");
     let library_save = {
         let state = lock(&shared);
-        let active = state.library_of(state.selected).active_save_dir();
+        let active = state.library_of(state.selected).active_save_dir().unwrap();
         fs::create_dir_all(&active).unwrap();
         fs::write(active.join("icon.sys"), b"synthetic save, not game data").unwrap();
         active
     };
     lock(&shared).game_child = Some(Arc::new(std::sync::Mutex::new(None)));
-    let id = gt4l_core::games::GT4.save_folder;
-    let error = commands::saves_delete_of(id.to_string(), &shared).unwrap_err();
+    // TASK-074: a save's id is its game and its name (the folder in Saves).
+    let error = commands::saves_delete_of("gt4:Default save".to_string(), &shared).unwrap_err();
     assert_eq!(error, "Close the game before you delete the active save.");
     assert!(library_save.is_dir(), "the save is still there");
     let _ = fs::remove_dir_all(&root);
@@ -1904,7 +1904,7 @@ fn play_names_the_first_start_keys_until_the_game_has_a_save() {
     assert_eq!(hint["right"], "Right", "{hint}");
     {
         let state = lock(&shared);
-        let active = state.library_of(state.selected).active_save_dir();
+        let active = state.library_of(state.selected).active_save_dir().unwrap();
         fs::create_dir_all(&active).unwrap();
         fs::write(active.join("icon.sys"), b"synthetic save, not game data").unwrap();
     }
@@ -2269,4 +2269,73 @@ fn play_switches_the_virtual_wheel_from_what_is_connected() {
     assert!(log.contains("wheel: virtual Driving Force Pro off for this Start (no wheel connected)"), "{log}");
     assert!(log.contains("wheel: the device list was not ready: the stored on/off is kept for this Start"), "{log}");
     let _ = fs::remove_dir_all(root);
+}
+
+/// TASK-074: a new install whose setup ran to the end (CoreGS 2.0, nothing downloaded).
+fn finished_install(name: &str) -> (PathBuf, Shared) {
+    let (root, _dirs, _pins, shared) = new_install(name);
+    let renderer: RendererInstaller = Arc::new(|_: &DataDirs, _: &mut dyn FnMut(gt4l_core::gs_release::Step)| Ok("1.0.1".to_string()));
+    setup::start_with(&shared, Recorder::default().notify(), renderer, coregs20_works()).expect("setup starts").join().unwrap();
+    (root, shared)
+}
+
+#[test]
+fn the_setup_wizard_asks_for_a_save_and_an_imported_one_replaces_the_empty_default() {
+    // TASK-074: a game set up with no save shows its empty default save in app_state, so the wizard asks "new game or
+    // import?". The import makes the file's save the one Play uses and removes the unused empty default save.
+    let (root, shared) = finished_install("setup-save-question");
+    let view = screen(&shared);
+    assert_eq!(view["setup"]["state"], "done", "{view}");
+    assert_eq!(view["setup"]["save"], json!({ "name": "Default save", "has_data": false }), "{view}");
+
+    let card = root.join("career-2006.ps2");
+    synthetic_card(&card);
+    let status = commands::setup_import_save_of(&shared, &card).unwrap();
+    assert_eq!(status, "career-2006 will be used the next time you play.");
+    assert_eq!(screen(&shared)["setup"]["save"], json!({ "name": "career-2006", "has_data": true }));
+    let names: Vec<String> = commands::saves_list_of(&shared).unwrap().items.iter().filter(|item| item.game == "gt4").map(|item| item.name.clone()).collect();
+    assert_eq!(names, ["career-2006"], "the empty default save is gone; the imported save is the only one");
+
+    // The same file again keeps its save selected and adds nothing.
+    assert_eq!(commands::setup_import_save_of(&shared, &card).unwrap(), "career-2006 will be used the next time you play.");
+    // A file with no save of this game selects nothing and says so.
+    let other = root.join("spec2-only.ps2");
+    synthetic_spec2_card(&other);
+    let refused = commands::setup_import_save_of(&shared, &other).unwrap_err();
+    assert!(refused.starts_with("That file has no Gran Turismo 4 save, so nothing was selected."), "{refused}");
+    assert_eq!(screen(&shared)["setup"]["save"]["name"], "career-2006");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn new_save_and_choosing_a_save_on_the_saves_page() {
+    // TASK-074: New save makes an empty save named by the player and marks it; choosing another save moves the mark only.
+    let (root, shared) = finished_install("saves-page-choice");
+    let card = root.join("career.ps2");
+    synthetic_card(&card);
+    commands::import_into(&shared, &card, Kind::Saves).unwrap();
+    let marked = |view: &commands::LibraryView| -> Vec<(String, bool, bool)> {
+        view.items.iter().filter(|item| item.game == "gt4").map(|item| (item.name.clone(), item.active, item.empty)).collect()
+    };
+    let view = commands::saves_new_of(Some("gt4".into()), Some("Fresh start".into()), &shared).unwrap();
+    assert_eq!(
+        marked(&view),
+        [("career".to_string(), false, false), ("Default save".to_string(), false, true), ("Fresh start".to_string(), true, true)]
+    );
+    let view = commands::saves_activate_of("gt4:career".into(), &shared).unwrap();
+    assert_eq!(view.status, "career will be used the next time you play.");
+    assert_eq!(
+        marked(&view),
+        [("career".to_string(), true, false), ("Default save".to_string(), false, true), ("Fresh start".to_string(), false, true)]
+    );
+    let view = commands::saves_rename_of("gt4:career".into(), "Main career".into(), &shared).unwrap();
+    assert_eq!(
+        marked(&view),
+        [("Default save".to_string(), false, true), ("Fresh start".to_string(), false, true), ("Main career".to_string(), true, false)],
+        "the list stays in name order and the mark follows the renamed save"
+    );
+    // Choosing a save is refused while the game runs.
+    lock(&shared).game_child = Some(Arc::new(std::sync::Mutex::new(None)));
+    assert!(commands::saves_activate_of("gt4:Fresh start".into(), &shared).is_err());
+    let _ = fs::remove_dir_all(&root);
 }
