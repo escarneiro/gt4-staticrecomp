@@ -421,7 +421,46 @@ pub fn local_time() -> gt4l_core::logs::LocalTime {
 }
 
 /// Off Windows the clock is read in UTC (the launcher only runs on Windows today).
-#[cfg(not(windows))]
+/// TASK-074 (Linux): the local time through the C library's `localtime_r` (the system time zone, `TZ` included).
+#[cfg(target_os = "linux")]
+pub fn local_time() -> gt4l_core::logs::LocalTime {
+    use std::ffi::{c_char, c_int, c_long};
+    /// glibc's `struct tm` on Linux.
+    #[repr(C)]
+    struct Tm {
+        tm_sec: c_int,
+        tm_min: c_int,
+        tm_hour: c_int,
+        tm_mday: c_int,
+        tm_mon: c_int,
+        tm_year: c_int,
+        tm_wday: c_int,
+        tm_yday: c_int,
+        tm_isdst: c_int,
+        tm_gmtoff: c_long,
+        tm_zone: *const c_char,
+    }
+    unsafe extern "C" {
+        fn localtime_r(time: *const i64, result: *mut Tm) -> *mut Tm;
+    }
+    let now = std::time::SystemTime::now();
+    let seconds = now.duration_since(std::time::UNIX_EPOCH).map(|value| value.as_secs() as i64).unwrap_or(0);
+    let mut tm = Tm { tm_sec: 0, tm_min: 0, tm_hour: 0, tm_mday: 0, tm_mon: 0, tm_year: 0, tm_wday: 0, tm_yday: 0, tm_isdst: 0, tm_gmtoff: 0, tm_zone: std::ptr::null() };
+    // SAFETY: both pointers are valid for the call; localtime_r writes only into `tm`.
+    if unsafe { localtime_r(&seconds, &mut tm) }.is_null() {
+        return utc_time_of(now);
+    }
+    gt4l_core::logs::LocalTime {
+        year: (tm.tm_year + 1900) as u32,
+        month: (tm.tm_mon + 1) as u32,
+        day: tm.tm_mday as u32,
+        hour: tm.tm_hour as u32,
+        minute: tm.tm_min as u32,
+        second: tm.tm_sec as u32,
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn local_time() -> gt4l_core::logs::LocalTime {
     utc_time_of(std::time::SystemTime::now())
 }
