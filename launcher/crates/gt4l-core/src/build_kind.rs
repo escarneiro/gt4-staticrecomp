@@ -17,6 +17,11 @@ pub enum BuildKind {
 /// The kind this binary was compiled as.
 pub const BUILD: BuildKind = if cfg!(feature = "portable") { BuildKind::Portable } else { BuildKind::Installer };
 
+/// TASK-074: this is the Linux AppImage build (Cargo feature `appimage`): a portable build whose `user` and `data`
+/// folders are in the per-user data folder (`crate::paths::appimage_data_home`) instead of beside the program, which
+/// is a read-only image. It never updates itself: a new version is a new AppImage file.
+pub const APPIMAGE: bool = cfg!(feature = "appimage");
+
 impl BuildKind {
     pub fn is_portable(self) -> bool {
         self == BuildKind::Portable
@@ -26,6 +31,7 @@ impl BuildKind {
     pub fn label(self) -> &'static str {
         match self {
             BuildKind::Installer => "Installer",
+            BuildKind::Portable if APPIMAGE => "AppImage",
             BuildKind::Portable => "Portable",
         }
     }
@@ -43,7 +49,7 @@ mod tests {
 
     #[test]
     fn the_labels_are_the_words_of_the_about_page() {
-        assert_eq!(BuildKind::Portable.label(), "Portable");
+        assert_eq!(BuildKind::Portable.label(), if APPIMAGE { "AppImage" } else { "Portable" });
         assert_eq!(BuildKind::Installer.label(), "Installer");
     }
 }

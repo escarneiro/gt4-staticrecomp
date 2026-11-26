@@ -43,10 +43,28 @@ fn main() {
     let restarted = webview_guard::restart_requested(std::env::args().skip(1));
     let portable = gt4l_core::build_kind::BUILD.is_portable();
     let exe_dir = updates::install_directory();
+    // TASK-074: the folder that holds `user` and `data`. Beside the program for the portable build; for the AppImage build
+    // (whose program files are a read-only image mounted somewhere new at each start) the per-user data folder,
+    // ~/.local/share/GT4Recomp.
+    let home_dir = if gt4l_core::build_kind::APPIMAGE {
+        match gt4l_core::paths::appimage_data_home_from_env().and_then(|folder| {
+            std::fs::create_dir_all(&folder).map_err(|error| format!("{}: {error}", folder.display()))?;
+            Ok(folder)
+        }) {
+            Ok(folder) => folder,
+            Err(message) => {
+                eprintln!("GT4Recomp cannot find its folders: {message}");
+                gt4l_platform::dialog::error_box_ok("GT4Recomp", &message);
+                return;
+            }
+        }
+    } else {
+        exe_dir.clone()
+    };
     if portable {
         // TASK-098: the lock belongs to this folder, so two portable copies (or a portable and the installed one) on one PC do
         // not block each other, and one copy cannot start twice.
-        gt4l_platform::process::set_single_instance_scope(&exe_dir);
+        gt4l_platform::process::set_single_instance_scope(&home_dir);
     }
     // A launcher started by the portable self-update waits for the old one to exit, as a safe-mode restart does.
     let after_update = std::env::args().skip(1).any(|argument| argument == gt4l_core::portable_update::RESTART_ARGUMENT);
@@ -63,7 +81,7 @@ fn main() {
     }
     // TASK-091: large data in `<exe dir>\data` (portable), user data in `%APPDATA%\GT4Recomp`. The 1.2.0 user
     // data moves here, before the window; the large data moves in the background below.
-    let startup = match relocation::prepare(&exe_dir) {
+    let startup = match relocation::prepare(&home_dir) {
         Ok(startup) => startup,
         Err(message) => {
             eprintln!("GT4Recomp cannot find its folders: {message}");
@@ -86,7 +104,7 @@ fn main() {
     if let Err(message) = session_log::start(&dirs, &header) {
         eprintln!("GT4Recomp cannot open its log: {message}");
     }
-    if portable {
+    if portable && !gt4l_core::build_kind::APPIMAGE {
         // TASK-098: finish or undo the previous update before anything reads the program files.
         updates::portable_start_cleanup(&dirs, &exe_dir);
     }

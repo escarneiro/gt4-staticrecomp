@@ -10,6 +10,9 @@ description = "GT4Recomp launcher core: settings table, config file, paths, laun
 [features]
 # The portable build (TASK-098): everything beside the executable, no registry or system folders, self-update by zip swap.
 portable = []
+# TASK-074: the Linux AppImage build. A portable build whose `user` and `data` folders live in
+# `$XDG_DATA_HOME/GT4Recomp` (else `~/.local/share/GT4Recomp`), since the program files are a read-only image.
+appimage = ["portable"]
 
 [dependencies]
 toml.workspace = true

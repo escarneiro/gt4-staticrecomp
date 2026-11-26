@@ -258,6 +258,12 @@ pub fn check_on_launch(app: AppHandle, shared: Shared) {
             Err(message) => state::log_error(&dirs, &format!("gt4-gs not installed at launch: {message}")),
         }
     }
+    if gt4l_core::build_kind::APPIMAGE {
+        // TASK-074: the AppImage never updates itself (a new version is a new AppImage file), and the releases list only
+        // Windows packages so far: no update check at launch.
+        state::log(&dirs, "updates: not checked (AppImage build)");
+        return;
+    }
     let channel = UpdateChannel::of(&config.settings);
     let result = check_with(&dirs, channel, config.skipped_launcher, config.skipped_renderer, true, fetch);
     let offers: Vec<OfferView> = result.offers.iter().filter(|offer| offer.is_update()).map(OfferView::of).collect();
@@ -390,6 +396,11 @@ pub fn pick_release<'a>(
 
 /// The installer or portable path for the target. Updating ends the launcher.
 fn run_launcher_update(app: &AppHandle, dirs: &DataDirs, target: &Target) -> Result<String, String> {
+    if gt4l_core::build_kind::APPIMAGE {
+        // TASK-074: the program files are a read-only image; a new version is a new AppImage file.
+        let _ = (app, dirs, target);
+        return Err(messages::text("update.appimage_manual", state::current_language()).to_string());
+    }
     if gt4l_core::build_kind::BUILD.is_portable() {
         start_portable_update(app, dirs, target)
     } else {

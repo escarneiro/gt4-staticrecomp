@@ -565,6 +565,7 @@
   "rust.renderer.close_game": "Close the game before updating the renderer.",
   "rust.update.close_game": "Close the game before updating GT4Recomp.",
   "rust.update.up_to_date": "GT4Recomp is up to date.",
+  "rust.update.appimage_manual": "This AppImage does not update itself. To update, download the new AppImage file and use it in place of this one; your settings and saves stay in ~/.local/share/GT4Recomp.",
   "rust.update.updated_start_again": "Updated. Start GT4Recomp again.",
   "rust.update.installed_start_again": "GT4Recomp {version} is installed. Start GT4Recomp again.",
   "rust.update.restarting": "Updated; restarting.",

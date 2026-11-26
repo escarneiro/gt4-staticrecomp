@@ -848,3 +848,18 @@ fn a_platform_without_gsdx_plays_coregs20() {
     assert!(gt4l_core_settings_default_is_gsdx, "the table is the same on every platform (decision 0074 on Windows)");
     assert_eq!(launch::GSDX_AVAILABLE, cfg!(windows));
 }
+
+// TASK-074: the AppImage names only the game's own library folder for the game, ahead of what LD_LIBRARY_PATH held.
+#[test]
+fn the_game_library_folder_goes_first_and_only_when_it_exists() {
+    use gt4l_core::launch::game_library_path;
+    use std::ffi::OsStr;
+    let folder = std::env::temp_dir().join(format!("gt4l-game-lib-{}", std::process::id()));
+    assert_eq!(game_library_path(&folder, None), None, "no folder, nothing to add");
+    std::fs::create_dir_all(&folder).unwrap();
+    let text = folder.display().to_string();
+    assert_eq!(game_library_path(&folder, None).as_deref(), Some(text.as_str()));
+    assert_eq!(game_library_path(&folder, Some(OsStr::new(""))).as_deref(), Some(text.as_str()));
+    assert_eq!(game_library_path(&folder, Some(OsStr::new("/opt/x"))), Some(format!("{text}:/opt/x")));
+    let _ = std::fs::remove_dir_all(&folder);
+}

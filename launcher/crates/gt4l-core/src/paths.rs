@@ -54,6 +54,24 @@ pub const USER_FOLDER_NAME: &str = "Gran Turismo 4";
 /// What that folder is renamed to once its saves and replays are in `%APPDATA%\GT4Recomp`.
 pub const MOVED_USER_FOLDER_NAME: &str = "Gran Turismo 4 (moved to AppData)";
 
+/// TASK-074: the folder the AppImage build keeps its `user` and `data` folders in: `$XDG_DATA_HOME/GT4Recomp` when
+/// `XDG_DATA_HOME` is an absolute path (the XDG Base Directory rule), else `$HOME/.local/share/GT4Recomp`.
+pub fn appimage_data_home(xdg_data_home: Option<&std::ffi::OsStr>, home: Option<&std::ffi::OsStr>) -> Result<PathBuf, String> {
+    let absolute = |value: Option<&std::ffi::OsStr>| value.filter(|text| !text.is_empty()).map(PathBuf::from).filter(|path| path.is_absolute());
+    if let Some(data_home) = absolute(xdg_data_home) {
+        return Ok(data_home.join(APP_FOLDER_NAME));
+    }
+    match absolute(home) {
+        Some(home) => Ok(home.join(".local").join("share").join(APP_FOLDER_NAME)),
+        None => Err("neither XDG_DATA_HOME nor HOME names a folder for the launcher's files".to_string()),
+    }
+}
+
+/// [`appimage_data_home`] from this process's environment.
+pub fn appimage_data_home_from_env() -> Result<PathBuf, String> {
+    appimage_data_home(std::env::var_os("XDG_DATA_HOME").as_deref(), std::env::var_os("HOME").as_deref())
+}
+
 /// Name of the game executable inside the game folder.
 pub const GAME_EXECUTABLE: &str = crate::games::GT4_EXECUTABLE;
 
@@ -723,6 +741,19 @@ pub fn resolve_portable(stored: &Path, install_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_appimage_folder_follows_the_xdg_rule() {
+        use std::ffi::OsStr;
+        let home = Some(OsStr::new("/home/player"));
+        assert_eq!(appimage_data_home(None, home).unwrap(), Path::new("/home/player/.local/share/GT4Recomp"));
+        assert_eq!(appimage_data_home(Some(OsStr::new("/data/xdg")), home).unwrap(), Path::new("/data/xdg/GT4Recomp"));
+        // An empty or relative XDG_DATA_HOME is ignored, as the XDG Base Directory rule says.
+        assert_eq!(appimage_data_home(Some(OsStr::new("")), home).unwrap(), Path::new("/home/player/.local/share/GT4Recomp"));
+        assert_eq!(appimage_data_home(Some(OsStr::new("rel/xdg")), home).unwrap(), Path::new("/home/player/.local/share/GT4Recomp"));
+        assert!(appimage_data_home(None, None).is_err());
+        assert!(appimage_data_home(None, Some(OsStr::new("relative"))).is_err());
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!("gt4l-paths-{}-{name}", std::process::id()));

@@ -224,6 +224,14 @@ pub fn start(
         None => launch::plan_coregs20_launch(&inputs, settings, display, textures, &inherited),
     };
     plan.environment.extend(extra_environment.iter().cloned());
+    if gt4l_core::build_kind::APPIMAGE {
+        // TASK-074: the game's own libraries inside the AppImage (see `launch::game_library_path`).
+        if let Some(folder) = plan.program.parent().map(|game| game.join("lib")) {
+            if let Some(value) = gt4l_core::launch::game_library_path(&folder, std::env::var_os("LD_LIBRARY_PATH").as_deref()) {
+                plan.environment.push(("LD_LIBRARY_PATH".to_string(), value));
+            }
+        }
+    }
     let child = spawn(&plan)?;
     Ok(Running {
         child: Arc::new(Mutex::new(Some(child))),

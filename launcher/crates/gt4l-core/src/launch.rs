@@ -610,6 +610,22 @@ pub fn plan_pcsx2_launch(
     plan_with(inputs, with_display(environment, display), inherited_names)
 }
 
+/// TASK-074: the AppImage carries the game's own libraries that a system may lack (SDL3) in `<game folder>/lib`; the game
+/// programs have no search path into the image, so the launcher names that folder in `LD_LIBRARY_PATH`, ahead of what the
+/// variable held. Only that small folder: the launcher's own libraries (GTK, WebKitGTK and what they pull in) are never
+/// put before the system's for the game, whose GPU driver must use the system's libraries. `None` when `lib_folder`
+/// does not exist (the portable folder, or a build without it).
+pub fn game_library_path(lib_folder: &std::path::Path, current: Option<&std::ffi::OsStr>) -> Option<String> {
+    if !lib_folder.is_dir() {
+        return None;
+    }
+    let folder = lib_folder.display().to_string();
+    Some(match current.map(|value| value.to_string_lossy().into_owned()).filter(|value| !value.is_empty()) {
+        Some(existing) => format!("{folder}:{existing}"),
+        None => folder,
+    })
+}
+
 fn with_display(mut environment: Vec<(String, String)>, display: Option<&DisplayTarget>) -> Vec<(String, String)> {
     environment.extend(display_environment(display));
     environment.sort();

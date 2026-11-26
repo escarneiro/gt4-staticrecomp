@@ -18,6 +18,8 @@ path = "src/main.rs"
 visual-check = []
 # The portable build (TASK-098): user data in `<exe dir>\user`, large data in `<exe dir>\data`, update by zip swap.
 portable = ["gt4l-core/portable"]
+# TASK-074: the Linux AppImage build (scripts/linux/appimage.sh): portable, with its folders in ~/.local/share/GT4Recomp.
+appimage = ["portable", "gt4l-core/appimage"]
 
 [dependencies]
 gt4l-core.workspace = true
@@ -41,4 +43,4 @@ windows = { version = "0.62", features = [
 ] }
 
 [build-dependencies]
-tauri-build = "2.6"
+tauri-build = { version = "2.6", features = [] }

@@ -565,6 +565,7 @@
   "rust.renderer.close_game": "Feche o jogo antes de atualizar o renderizador.",
   "rust.update.close_game": "Feche o jogo antes de atualizar o GT4Recomp.",
   "rust.update.up_to_date": "O GT4Recomp está atualizado.",
+  "rust.update.appimage_manual": "Este AppImage não se atualiza sozinho. Para atualizar, baixe o novo arquivo AppImage e use-o no lugar deste; suas configurações e saves continuam em ~/.local/share/GT4Recomp.",
   "rust.update.updated_start_again": "Atualizado. Inicie o GT4Recomp de novo.",
   "rust.update.installed_start_again": "O GT4Recomp {version} está instalado. Inicie o GT4Recomp de novo.",
   "rust.update.restarting": "Atualizado; reiniciando.",
