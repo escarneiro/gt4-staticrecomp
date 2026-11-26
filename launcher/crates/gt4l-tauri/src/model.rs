@@ -290,6 +290,11 @@ fn without_fast_vsync(row: &mut Value) {
     row["help_key"] = json!("setting.vsync.help_coregs20");
 }
 
+/// Whether a choice of a launcher row is offered: every choice, except GSdx in the Renderer row on a platform without GSdx.
+pub fn renderer_choice_offered(id: &str, value: &str, gsdx_available: bool) -> bool {
+    gsdx_available || id != "renderer" || value != gt4l_core::settings::PCSX2_GS
+}
+
 fn launcher_row(definition: &SettingDef, settings: &Settings) -> Value {
     let group = match definition.page {
         Page::General => "general",
@@ -304,6 +309,8 @@ fn launcher_row(definition: &SettingDef, settings: &Settings) -> Value {
             Value::Array(
                 choices
                     .iter()
+                    // TASK-074: GSdx is not a choice where the platform has no GSdx (Linux).
+                    .filter(|choice| renderer_choice_offered(definition.id, choice.value, crate::state::gsdx_available()))
                     .map(|choice| json!({ "value": choice.value, "label": choice.label, "disabled": !choice.selectable }))
                     .collect(),
             ),
@@ -1195,16 +1202,27 @@ mod table_tests {
     }
 
     #[test]
+    fn gsdx_is_offered_only_where_the_platform_has_it() {
+        assert!(renderer_choice_offered("renderer", "pcsx2", true));
+        assert!(!renderer_choice_offered("renderer", "pcsx2", false));
+        assert!(renderer_choice_offered("renderer", "coregs20", false));
+        // Other rows keep every choice, even one named like the GSdx value.
+        assert!(renderer_choice_offered("graphics_api", "pcsx2", false));
+    }
+
+    #[test]
     fn renderer_dropdown_offers_gsdx_and_coregs20_beta() {
         let table = settings_table(&Settings::default(), &Controls::default());
         let renderer = row(&table, "renderer");
         assert_eq!(renderer["current"], "pcsx2");
         assert_eq!(renderer["control"], "dropdown");
         let values = renderer["values"].as_array().unwrap();
-        assert_eq!(values.len(), 2, "GSdx and CoreGS 2.0 only; CoreGS 1.1 is gone (TASK-096)");
-        assert_eq!(values[1]["value"], "coregs20");
-        assert_eq!(values[1]["disabled"], false);
-        assert_eq!(values[1]["label"], "CoreGS 2.0 (recommended)");
+        // GSdx and CoreGS 2.0 only; CoreGS 1.1 is gone (TASK-096). Without GSdx on the platform (Linux), CoreGS 2.0 alone.
+        let expected: &[&str] = if crate::state::gsdx_available() { &["pcsx2", "coregs20"] } else { &["coregs20"] };
+        assert_eq!(values.iter().map(|value| value["value"].as_str().unwrap()).collect::<Vec<_>>(), expected);
+        let coregs20 = values.last().unwrap();
+        assert_eq!(coregs20["disabled"], false);
+        assert_eq!(coregs20["label"], "CoreGS 2.0 (recommended)");
         for shared in CORE_GS_20_TABLE_ROWS {
             assert!(row(&table, shared).get("visible_when").is_none(), "{shared} works under both renderers");
         }

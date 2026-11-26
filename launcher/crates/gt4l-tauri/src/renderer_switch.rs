@@ -58,8 +58,20 @@ pub fn run(home_ready: bool, installed: bool, install: &mut dyn FnMut() -> Resul
 /// `gsdx_download_needed()`: whether choosing GSdx now needs a download. Before setup it does not: setup installs it.
 #[tauri::command]
 pub fn gsdx_download_needed(shared: State<'_, Shared>) -> bool {
+    if !crate::state::gsdx_available() {
+        return false;
+    }
     let state = lock(shared.inner());
     needs_install(state.home_ready(), !gt4l_core::gs_release::needs_install(&state.dirs.renderer_root()))
+}
+
+/// TASK-074: GSdx (`gt4-gs.exe`) is a Windows program; elsewhere its download and package install are refused.
+fn gsdx_on_this_platform() -> Result<(), String> {
+    if crate::state::gsdx_available() {
+        Ok(())
+    } else {
+        Err("GSdx is available on Windows only; this platform uses CoreGS 2.0.".to_string())
+    }
 }
 
 /// What the dialog hears about a step of the download.
@@ -73,6 +85,7 @@ pub fn download_event(step: Step) -> Value {
 /// `download_gsdx()`: installs GSdx, with `gsdx-download` events for the dialog. An error is the notice the dialog shows.
 #[tauri::command(async)]
 pub fn download_gsdx(app: AppHandle, shared: State<'_, Shared>) -> Result<(), String> {
+    gsdx_on_this_platform()?;
     let dirs = lock(shared.inner()).dirs.clone();
     updates::install_renderer(&dirs, &mut |step| {
         let _ = app.emit("gsdx-download", download_event(step));
@@ -90,6 +103,7 @@ pub fn download_gsdx(app: AppHandle, shared: State<'_, Shared>) -> Result<(), St
 /// the picker was cancelled; an error is the text the dialog shows. Emits the same `gsdx-download` steps.
 #[tauri::command]
 pub async fn install_gsdx_archive(app: AppHandle, shared: State<'_, Shared>) -> Result<Option<()>, String> {
+    gsdx_on_this_platform()?;
     let (dirs, language) = {
         let state = lock(shared.inner());
         (state.dirs.clone(), state::language_of(&state))

@@ -829,3 +829,22 @@ fn the_wheel_file_line_of_game_ini_stands_for_gt4_wheel_file() {
     assert_eq!(variables.get("GT4_WHEEL_FILE").map(String::as_str), Some(r"C:\Users\Player\AppData\Roaming\GT4Recomp\wheel.toml"));
     assert!(!launch::standalone_config_text(&Settings::default(), None).contains("wheel_file"), "only written when the file exists");
 }
+
+/// TASK-074: without GSdx on the platform (Linux), CoreGS 2.0 is the renderer whatever the settings say; with GSdx
+/// (Windows) the stored choice and the table default stay as they are.
+#[test]
+fn a_platform_without_gsdx_plays_coregs20() {
+    let mut fresh = Settings::default();
+    assert!(!launch::apply_platform_renderer(&mut fresh, true), "Windows keeps the table default");
+    assert!(!launch::uses_coregs20(&fresh));
+    assert!(launch::apply_platform_renderer(&mut fresh, false), "Linux switches a new install to CoreGS 2.0");
+    assert!(launch::uses_coregs20(&fresh));
+    assert!(!launch::apply_platform_renderer(&mut fresh, false), "already CoreGS 2.0: nothing changes");
+    let mut stored_gsdx = Settings::default();
+    stored_gsdx.set_by_user("renderer", "pcsx2").unwrap();
+    assert!(launch::apply_platform_renderer(&mut stored_gsdx, false), "a stored GSdx choice cannot play on Linux");
+    assert!(launch::uses_coregs20(&stored_gsdx));
+    let gt4l_core_settings_default_is_gsdx = Settings::default().get("renderer") == gt4l_core::settings::PCSX2_GS;
+    assert!(gt4l_core_settings_default_is_gsdx, "the table is the same on every platform (decision 0074 on Windows)");
+    assert_eq!(launch::GSDX_AVAILABLE, cfg!(windows));
+}

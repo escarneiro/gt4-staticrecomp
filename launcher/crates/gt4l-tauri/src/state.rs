@@ -205,6 +205,30 @@ pub fn log_error(dirs: &DataDirs, message: &str) {
     crate::session_log::write(dirs, gt4l_core::logs::Level::Error, message);
 }
 
+/// Whether this platform has GSdx ([`gt4l_core::launch::GSDX_AVAILABLE`]). Test builds answer `true` unless a test asks
+/// for the other platform with [`set_gsdx_available_for_tests`], so the Windows flows (GSdx by default, decision 0074) are
+/// tested on every host and the Linux rule (TASK-074) by its own tests.
+#[cfg(not(test))]
+pub fn gsdx_available() -> bool {
+    gt4l_core::launch::GSDX_AVAILABLE
+}
+
+#[cfg(test)]
+thread_local! {
+    static GSDX_AVAILABLE_FOR_TESTS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+#[cfg(test)]
+pub fn gsdx_available() -> bool {
+    GSDX_AVAILABLE_FOR_TESTS.with(|value| value.get())
+}
+
+/// Test builds only: the platform this thread's flows describe (`false` = a platform without GSdx, Linux).
+#[cfg(test)]
+pub fn set_gsdx_available_for_tests(available: bool) {
+    GSDX_AVAILABLE_FOR_TESTS.with(|value| value.set(available));
+}
+
 impl AppState {
     /// Loads the settings and controls from the user data folder and opens the save library there.
     /// `pre_1_0_root` is the 1.2.0 `%LOCALAPPDATA%\GT4Recomp`, which may still hold a library of launchers before 1.0.0.
@@ -224,6 +248,10 @@ impl AppState {
         set_current_language(language_of_settings(&config.settings));
         // TASK-109: a release candidate build with no chosen update channel stays on Beta; any other build on Stable.
         gt4l_core::update::apply_channel_default(&mut config.settings, gt4l_core::launcher_release_version());
+        // TASK-074: without GSdx on this platform (Linux), CoreGS 2.0 is the renderer.
+        if gt4l_core::launch::apply_platform_renderer(&mut config.settings, gsdx_available()) {
+            log(&dirs, "settings: CoreGS 2.0 is the renderer (GSdx is not available on this platform)");
+        }
         // Stored paths inside the install folder are relative (see `save_config`); resolve them here.
         config.disc_path = config.disc_path.map(|path| paths::resolve_portable(&path, &install_dir));
         config.dev_game_dir = config.dev_game_dir.map(|path| paths::resolve_portable(&path, &install_dir));

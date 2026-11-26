@@ -230,6 +230,20 @@ pub fn uses_coregs20(settings: &Settings) -> bool {
     settings.get("renderer") == settings::CORE_GS_20
 }
 
+/// Whether this platform has GSdx: `gt4-gs.exe` is a Windows program. On Linux (TASK-074) the game program has CoreGS 2.0
+/// only, so GSdx is never offered, downloaded or started there.
+pub const GSDX_AVAILABLE: bool = cfg!(windows);
+
+/// TASK-074: on a platform without GSdx (`gsdx_available` false), CoreGS 2.0 is the renderer, whatever the settings file
+/// or the table default says. Returns whether the setting changed. The settings table itself stays the same on every
+/// platform, so the Windows rules (GSdx by default, decision 0074) are tested on Linux too.
+pub fn apply_platform_renderer(settings: &mut Settings, gsdx_available: bool) -> bool {
+    if gsdx_available || uses_coregs20(settings) {
+        return false;
+    }
+    settings.set("renderer", settings::CORE_GS_20).is_ok()
+}
+
 /// The variables of a CoreGS 2.0 session (TASK-027). The renderer lives in the game executable, so no process, pin or
 /// INI goes with it. Scale: the session plan's multiplier, as GSdx gets it. The effect toggles (TASK-186): each of the old
 /// Performance Mode's items is its own switch. Custom textures: the same Textures folder and the same row as GSdx. The card

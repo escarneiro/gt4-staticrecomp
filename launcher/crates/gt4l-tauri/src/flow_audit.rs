@@ -197,8 +197,17 @@ fn play_plan(shared: &Shared, program_dir: &Path) -> Result<launch::LaunchPlan, 
     };
     let inherited: Vec<String> = std::env::vars().map(|(name, _)| name).collect();
     let textures = crate::state::lock(shared).dirs.textures();
-    let paths = launch::Pcsx2Paths::for_session(inputs.pcsx2.as_ref().expect("a GSdx session"), &inputs.dirs.root().join("gs"), &session, &textures);
-    Ok(launch::plan_pcsx2_launch(&launch_inputs, &inputs.settings, &paths, inputs.display.as_ref(), &inherited))
+    match inputs.pcsx2.as_ref() {
+        Some(installed) => {
+            let paths = launch::Pcsx2Paths::for_session(installed, &inputs.dirs.root().join("gs"), &session, &textures);
+            Ok(launch::plan_pcsx2_launch(&launch_inputs, &inputs.settings, &paths, inputs.display.as_ref(), &inherited))
+        }
+        // A CoreGS 2.0 session (no GS process), as gt4l_platform::game::start plans it.
+        None => {
+            let location = crate::state::lock(shared).texture_location().0;
+            Ok(launch::plan_coregs20_launch(&launch_inputs, &inputs.settings, inputs.display.as_ref(), &location, &inherited))
+        }
+    }
 }
 
 #[test]
@@ -666,6 +675,50 @@ fn without_gsdx_setup_finishes_and_play_refuses_with_the_log_folder() {
         "the reason, what to do and the log folder"
     );
     assert!(refusal.contains("Check your internet connection and try again"), "{refusal}");
+    let _ = fs::remove_dir_all(root);
+}
+
+/// TASK-074 (Linux): a platform without GSdx sets up with CoreGS 2.0, downloads nothing, and plays with CoreGS 2.0 even
+/// when the settings file had GSdx.
+#[test]
+fn without_gsdx_on_the_platform_setup_and_play_use_coregs20() {
+    crate::state::set_gsdx_available_for_tests(false);
+    let root = scratch("no-gsdx-platform");
+    let dirs = DataDirs::new(root.join("data"));
+    let game = synthetic_game(0x0010_0000, 0x0010_0008, b"synthetic guest code, not game data, 0123456789abcdef");
+    let image = build_iso(
+        "GT4 USA",
+        &[
+            ("SYSTEM.CNF;1", system_cnf("SCUS_973.28", "2.00", "NTSC")),
+            ("CORE.GT4;1", game.core.clone()),
+            ("SCUS_973.28;1", vec![0xA5; 3000]),
+        ],
+    );
+    let pins = pins_for(&image, &game, "SCUS-97328", "2.00");
+    let picked = root.join("disc.iso");
+    fs::write(&picked, image).unwrap();
+    let shared = launch(&dirs, &pins);
+    assert_eq!(lock(&shared).config.settings.get("renderer"), gt4l_core::settings::CORE_GS_20, "CoreGS 2.0 from the start");
+    let table = crate::model::settings_table(&lock(&shared).config.settings, &gt4controls::Controls::default());
+    let renderer = table["rows"].as_array().unwrap().iter().find(|row| row["id"] == "renderer").unwrap().clone();
+    assert_eq!(renderer["values"].as_array().unwrap().len(), 1, "GSdx is not offered: {renderer}");
+    setup::choose_disc_path(&shared, &picked).unwrap();
+    let recorder = Recorder::default();
+    run_setup(&shared, &recorder, offline_renderer());
+    let view = screen(&shared);
+    assert_eq!(view["setup"]["state"], "done");
+    assert_eq!(view["setup"]["note"], "", "nothing to install, nothing missing");
+    assert!(!recorder.names("renderer-progress").iter().any(|event| event["step"] == "downloading"), "no GSdx download");
+
+    let program = root.join("program");
+    fs::create_dir_all(program.join("game")).unwrap();
+    fs::write(program.join("game").join(gt4l_core::games::GT4_EXECUTABLE), b"stand-in, never started").unwrap();
+    let plan = play_plan(&launch(&dirs, &pins), &program).expect("plays with CoreGS 2.0");
+    assert_eq!(plan.program, program.join("game").join(gt4l_core::games::GT4_EXECUTABLE));
+    let environment: std::collections::BTreeMap<_, _> = plan.environment.iter().cloned().collect();
+    assert_eq!(environment.get("GT4_RENDERER").map(String::as_str), Some("hw"), "{environment:?}");
+    assert!(!environment.contains_key("GT4_GS_PROCESS"), "no GS process");
+    crate::state::set_gsdx_available_for_tests(true);
     let _ = fs::remove_dir_all(root);
 }
 
