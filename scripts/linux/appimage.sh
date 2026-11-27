@@ -20,6 +20,8 @@
 #   GT4_LINUX_GT4_BUILD      v2.00 game build (default private/linux074-pgo-build, else private/linux074-frameskip-build)
 #   GT4_LINUX_SPEC2_BUILD    Spec II game build (default private/linux074-spec2-pgo-build, else private/linux074-spec2-build)
 #   CARGO_TARGET_DIR         the launcher's cargo build folder (default private/linux074-appimage-target)
+#   GT4_RELEASE_LABEL        release label, rc<N> (for example rc15): the launcher reports <version>-rc<N> and the file is
+#                            GT4Recomp-<version>-rc<N>-x86_64.AppImage (as build-release.ps1 -Label on Windows); empty = final
 #   GT4_APPIMAGE_RUNTIME     the AppImage type 2 runtime (default private/tooling/appimage/runtime-x86_64; downloaded when missing)
 #   GT4_TAURI_CLI            cargo-tauri 2.x (default private/tooling/tauri-cli/bin/cargo-tauri; installed there when missing)
 #
@@ -89,6 +91,10 @@ install -m 644 "$(readlink -f "$sdl3")" "$stage/game/lib/libSDL3.so.0"
 
 # The bundle settings for this build only (tauri.conf.json keeps "active": false for the Windows builds).
 version=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' "$root/launcher/crates/gt4l-tauri/tauri.conf.json" | head -n1)
+label=${GT4_RELEASE_LABEL:-}
+[[ -z $label || $label =~ ^rc[1-9][0-9]*$ ]] || { echo "GT4_RELEASE_LABEL must be empty or rc<N> (for example rc15), got '$label'" >&2; exit 2; }
+export GT4_RELEASE_LABEL=$label
+release_version=$version${label:+-$label}
 cat > "$stage/tauri.appimage.json" <<EOF
 {
   "bundle": {
@@ -115,7 +121,7 @@ EOF
 
 built=$(ls -t "$CARGO_TARGET_DIR"/release/bundle/appimage/*.AppImage | head -n1)
 mkdir -p "$out"
-target=$out/GT4Recomp-$version-x86_64.AppImage
+target=$out/GT4Recomp-$release_version-x86_64.AppImage
 cp "$built" "$target"
 chmod 755 "$target"
 echo "  v2.00 from $gt4_build"

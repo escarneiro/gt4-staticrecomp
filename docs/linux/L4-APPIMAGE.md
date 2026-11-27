@@ -60,3 +60,19 @@ checked for identical frames, since an older glibc has another `atan2f`.
   (AppImage build)" and "the launcher page drew its first screen".
 - Size of the first build: about 157 MiB.
 - Known: the launcher ignores SIGTERM (as the portable build); close it from its window.
+
+## Releases
+
+`scripts/linux/release.sh <tag>` (for example `v1.3.0-rc15`) builds the AppImage with the tag's label (`GT4_RELEASE_LABEL`,
+the launcher then reports `1.3.0-rc15`), tags HEAD when the tag is new, pushes the tag to the `fork` remote and uploads the
+AppImage and `SHA256SUMS` to a **draft** GitHub release on that repository, with `docs/release-notes/linux/<version>.md` as its
+text. Running it again replaces the draft's assets; a published release is never changed. It never publishes: it prints the
+`gh release edit` command that does.
+
+No hosted CI builds this: the game programs are compiled from inputs made from the player's own disc, which a public repository
+or a GitHub-hosted runner cannot hold. The script is the release pipeline, run on the machine that has the builds.
+
+The tag names follow upstream's (`v1.3.0-rcN`) on the owner's choice (2026-11-27); upstream has its own tags of those names
+for its Windows builds. A local copy of an upstream tag of the same name must be removed before the release
+(`git tag -d v1.3.0-rc15`); the `origin` remote then fetches upstream tags as `refs/tags/upstream/*` only.
+
